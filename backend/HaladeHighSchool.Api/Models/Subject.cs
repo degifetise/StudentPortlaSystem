@@ -2,7 +2,7 @@ namespace HaladeHighSchool.Api.Models;
 
 /// <summary>
 /// A subject is defined per grade level, so "Mathematics" exists once for each
-/// of Grade 9-12 with its own code (MATH-9, MATH-10, ...).
+/// of supported grade levels with its own code (MATH-1, MATH-2, ...).
 /// </summary>
 public class Subject
 {

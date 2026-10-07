@@ -116,6 +116,7 @@ public class MarksController : PortalControllerBase
             AssessmentId = assessment.Id,
             AssessmentTitle = assessment.Title,
             AssessmentType = assessment.AssessmentType,
+            CustomTypeTitle = assessment.CustomTypeTitle,
             MaxScore = assessment.MaxScore,
             WeightPercentage = weight,
             SubjectId = assessment.SubjectId,
@@ -153,10 +154,10 @@ public class MarksController : PortalControllerBase
             return denial;
         }
 
-        if (request.Score > assessment.MaxScore)
+        if (request.Score < 0 || request.Score > assessment.MaxScore)
         {
             ModelState.AddModelError(nameof(request.Score),
-                $"Score {request.Score} exceeds the maximum of {assessment.MaxScore} for '{assessment.Title}'.");
+            $"Scores must be between 0 and {assessment.MaxScore:0.##} points.");
             return ValidationProblem(ModelState);
         }
 
@@ -184,6 +185,8 @@ public class MarksController : PortalControllerBase
                 cancellationToken);
 
         var isNew = existing is null;
+            var newlyPublished = request.IsPublished &&
+                (existing?.IsPublished != true || existing.Score != request.Score);
 
         if (existing is null)
         {
@@ -207,6 +210,11 @@ public class MarksController : PortalControllerBase
         existing.Score = request.Score;
         existing.Remark = request.Remark;
         SetPublished(existing, request.IsPublished);
+
+        if (newlyPublished)
+        {
+            await QueueResultNotificationsAsync(assessment, [request.StudentId], cancellationToken);
+        }
 
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -254,11 +262,13 @@ public class MarksController : PortalControllerBase
             return ValidationProblem(ModelState);
         }
 
-        var overMax = request.Entries.Where(e => e.Score > assessment.MaxScore).ToList();
+        var overMax = request.Entries
+            .Where(entry => entry.Score < 0 || entry.Score > assessment.MaxScore)
+            .ToList();
         if (overMax.Count > 0)
         {
             ModelState.AddModelError(nameof(request.Entries),
-                $"{overMax.Count} score(s) exceed the maximum of {assessment.MaxScore}.");
+                $"{overMax.Count} score(s) exceed the assessment maximum of {assessment.MaxScore:0.##} points.");
             return ValidationProblem(ModelState);
         }
 
@@ -287,6 +297,13 @@ public class MarksController : PortalControllerBase
         var existingMarks = await _db.Marks
             .Where(m => m.AssessmentId == request.AssessmentId && requestedIds.Contains(m.StudentId))
             .ToDictionaryAsync(m => m.StudentId, cancellationToken);
+        var newlyPublishedStudentIds = request.IsPublished
+            ? request.Entries
+                .Where(entry => !existingMarks.TryGetValue(entry.StudentId, out var existing) ||
+                    !existing.IsPublished || existing.Score != entry.Score)
+                .Select(entry => entry.StudentId)
+                .ToList()
+            : [];
 
         var created = 0;
         var updated = 0;
@@ -318,6 +335,11 @@ public class MarksController : PortalControllerBase
                 _db.Marks.Add(newMark);
                 created++;
             }
+        }
+
+        if (newlyPublishedStudentIds.Count > 0)
+        {
+            await QueueResultNotificationsAsync(assessment, newlyPublishedStudentIds, cancellationToken);
         }
 
         await _db.SaveChangesAsync(cancellationToken);
@@ -368,6 +390,7 @@ public class MarksController : PortalControllerBase
             return ValidationProblem(ModelState);
         }
 
+        var newlyPublished = request.IsPublished == true && !mark.IsPublished;
         mark.Score = request.Score;
         mark.Remark = request.Remark;
         mark.UpdatedAt = DateTime.UtcNow;
@@ -375,6 +398,11 @@ public class MarksController : PortalControllerBase
         if (request.IsPublished is bool publish)
         {
             SetPublished(mark, publish);
+        }
+
+        if (newlyPublished)
+        {
+            await QueueResultNotificationsAsync(mark.Assessment, [mark.StudentId], cancellationToken);
         }
 
         await _db.SaveChangesAsync(cancellationToken);
@@ -408,6 +436,12 @@ public class MarksController : PortalControllerBase
         }
 
         var publishedAt = request.IsPublished ? DateTime.UtcNow : (DateTime?)null;
+        var newlyPublishedStudentIds = request.IsPublished
+            ? await _db.Marks.AsNoTracking()
+                .Where(mark => mark.AssessmentId == assessmentId && !mark.IsPublished)
+                .Select(mark => mark.StudentId)
+                .ToListAsync(cancellationToken)
+            : [];
 
         var affected = await _db.Marks
             .Where(m => m.AssessmentId == assessmentId && m.IsPublished != request.IsPublished)
@@ -416,6 +450,12 @@ public class MarksController : PortalControllerBase
                 .SetProperty(m => m.PublishedAt, publishedAt)
                 .SetProperty(m => m.UpdatedAt, DateTime.UtcNow),
                 cancellationToken);
+
+        if (newlyPublishedStudentIds.Count > 0)
+        {
+            await QueueResultNotificationsAsync(assessment, newlyPublishedStudentIds, cancellationToken);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
 
         _logger.LogInformation(
             "Assessment {AssessmentId} marks set to IsPublished={IsPublished} for {Affected} rows",
@@ -628,6 +668,43 @@ public class MarksController : PortalControllerBase
 
         mark.IsPublished = isPublished;
         mark.PublishedAt = isPublished ? DateTime.UtcNow : null;
+    }
+
+    private async Task QueueResultNotificationsAsync(
+        Assessment assessment,
+        IEnumerable<int> studentIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = studentIds.Distinct().ToArray();
+        if (ids.Length == 0) return;
+
+        var userIds = await _db.Students
+            .AsNoTracking()
+            .Where(student => ids.Contains(student.Id) && student.UserId != null)
+            .Select(student => student.UserId!)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        if (userIds.Count == 0) return;
+
+        var subjectName = assessment.Subject?.SubjectName ?? await _db.Subjects
+            .AsNoTracking()
+            .Where(subject => subject.Id == assessment.SubjectId)
+            .Select(subject => subject.SubjectName)
+            .FirstOrDefaultAsync(cancellationToken) ?? "your subject";
+        var assessmentName = assessment.AssessmentType == AssessmentType.Other
+            ? assessment.CustomTypeTitle ?? assessment.Title
+            : assessment.AssessmentType.ToString();
+        var message = $"New results posted for {subjectName}: {assessmentName} (Out of {assessment.MaxScore:0.##})";
+
+        _db.Notifications.AddRange(userIds.Select(userId => new Notification
+        {
+            UserId = userId,
+            Title = "New results posted",
+            Message = message,
+            Type = "Result",
+            TargetUrl = "/student/results",
+            CreatedAt = DateTime.UtcNow
+        }));
     }
 
     private IQueryable<MarkResponse> PublishedMarksQuery(int studentId, int? subjectId)

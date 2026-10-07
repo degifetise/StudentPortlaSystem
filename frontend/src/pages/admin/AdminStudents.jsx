@@ -1,30 +1,38 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookOpen, Layers, Plus, RefreshCw, Users, UsersRound } from 'lucide-react';
-import { gradeLevelApi, sectionApi, studentApi, teacherApi } from '../../services/endpoints';
+import { BookOpen, Download, Layers, Plus, RefreshCw, Users, UsersRound } from 'lucide-react';
+import { bulkAdminApi, gradeLevelApi, reportPdfApi, sectionApi, studentApi, teacherApi } from '../../services/endpoints';
 import { extractErrorMessage } from '../../services/api';
 import { Alert, Badge, EmptyState, ErrorState, LoadingPanel, Spinner } from '../../components/ui/Feedback';
+import ProfilePhotoField from '../../components/auth/ProfilePhotoField';
 import { PAGE_SIZE, Pager, PeopleTable, RowActions, SearchBox, StatCard, totalPagesOf } from './adminShared';
 
 /** Enrol one student directly. Skips the approval queue: an administrator is the approval. */
 function NewStudentForm({ gradeLevels, sections, onCreated, onError }) {
-  const [form, setForm] = useState({ fullName: '', email: '', gradeLevelId: '', sectionId: '' });
+  const [form, setForm] = useState({ fullName: '', gradeLevelId: '', sectionId: '' });
+  const [photo, setPhoto] = useState(null);
+  const [photoPending, setPhotoPending] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const update = (key) => (event) => setForm((prev) => ({ ...prev, [key]: event.target.value }));
 
   async function submit(event) {
     event.preventDefault();
+    if (photoPending) {
+      onError('Confirm or cancel the selected photo before creating the student.');
+      return;
+    }
     setSaving(true);
     onError(null);
 
     try {
       const result = await studentApi.create({
         fullName: form.fullName.trim(),
-        email: form.email.trim(),
         gradeLevelId: Number(form.gradeLevelId),
         sectionId: Number(form.sectionId),
+        photo,
       });
-      setForm({ fullName: '', email: '', gradeLevelId: '', sectionId: '' });
+      setForm({ fullName: '', gradeLevelId: '', sectionId: '' });
+      setPhoto(null);
       onCreated(result);
     } catch (err) {
       onError(err.friendlyMessage ?? extractErrorMessage(err));
@@ -34,7 +42,16 @@ function NewStudentForm({ gradeLevels, sections, onCreated, onError }) {
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-3 border-t border-slate-200 p-4 sm:grid-cols-5">
+    <form onSubmit={submit} className="grid gap-3 border-t border-slate-200 p-4 sm:grid-cols-4">
+      <p className="text-xs text-slate-500 sm:col-span-4">
+        A student ID and school login email are generated automatically when enrolled.
+      </p>
+      <ProfilePhotoField
+        file={photo}
+        onChange={setPhoto}
+        onPendingChange={setPhotoPending}
+        disabled={saving}
+      />
       <input
         className="input sm:col-span-1"
         placeholder="Full name"
@@ -42,15 +59,6 @@ function NewStudentForm({ gradeLevels, sections, onCreated, onError }) {
         value={form.fullName}
         onChange={update('fullName')}
         aria-label="Full name"
-      />
-      <input
-        className="input sm:col-span-2"
-        type="email"
-        placeholder="student@haladehighschool.edu"
-        required
-        value={form.email}
-        onChange={update('email')}
-        aria-label="Email"
       />
       <select
         className="input"
@@ -112,6 +120,11 @@ export default function AdminStudents() {
   const [page, setPage] = useState(1);
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [busyId, setBusyId] = useState(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(null);
+  const [bulkIds, setBulkIds] = useState('');
+  const [bulkGradeId, setBulkGradeId] = useState('');
+  const [bulkSectionId, setBulkSectionId] = useState('');
+  const [bulkSaving, setBulkSaving] = useState(false);
 
   /* The grade and section lists drive both the filters and the enrolment form, so a failure
      here is terminal for the page and offers a retry rather than a screen full of zeros. */
@@ -128,10 +141,10 @@ export default function AdminStudents() {
         teacherApi.list({ page: 1, pageSize: 1, includeInactive: true }),
       ]);
 
-      setGradeLevels(grades);
-      setSections(sectionList);
-      setSummary(rosterSummary);
-      setTeacherCount(staff.totalCount);
+      setGradeLevels(Array.isArray(grades) ? grades : []);
+      setSections(Array.isArray(sectionList) ? sectionList : []);
+      setSummary(Array.isArray(rosterSummary) ? rosterSummary : []);
+      setTeacherCount(Number.isFinite(staff?.totalCount) ? staff.totalCount : 0);
     } catch (err) {
       setReferenceError(err.friendlyMessage ?? extractErrorMessage(err));
     } finally {
@@ -154,7 +167,13 @@ export default function AdminStudents() {
         gradeLevelId: filters.gradeLevelId || undefined,
         sectionId: filters.sectionId || undefined,
       });
-      setStudents(data);
+      setStudents({
+        items: Array.isArray(data?.items) ? data.items : [],
+        page: Number.isInteger(data?.page) ? data.page : page,
+        pageSize: Number.isInteger(data?.pageSize) ? data.pageSize : PAGE_SIZE,
+        totalCount: Number.isFinite(data?.totalCount) ? data.totalCount : 0,
+      });
+      setError(null);
     } catch (err) {
       setError(err.friendlyMessage ?? extractErrorMessage(err));
     } finally {
@@ -210,6 +229,46 @@ export default function AdminStudents() {
     }
   }
 
+  async function downloadStudentRoster(sectionSpecific) {
+    setDownloadingPdf(sectionSpecific ? 'section' : 'all');
+    setError(null);
+    try {
+      await reportPdfApi.studentsRoster(sectionSpecific
+        ? { gradeLevelId: filters.gradeLevelId, sectionId: filters.sectionId }
+        : {});
+    } catch (err) {
+      setError(err.friendlyMessage ?? err.message ?? 'The student roster PDF could not be downloaded.');
+    } finally {
+      setDownloadingPdf(null);
+    }
+  }
+
+  async function enrollStudentsInBulk(event) {
+    event.preventDefault();
+    const studentIdNumbers = bulkIds.split(/[\s,;]+/).map((value) => value.trim()).filter(Boolean);
+    if (!studentIdNumbers.length || !bulkGradeId || !bulkSectionId) {
+      setError('Enter student ID numbers and choose a destination grade and section.');
+      return;
+    }
+
+    setBulkSaving(true);
+    setError(null);
+    try {
+      const result = await bulkAdminApi.enrollStudents({
+        studentIdNumbers,
+        gradeLevelId: Number(bulkGradeId),
+        sectionId: Number(bulkSectionId),
+      });
+      setNotice(`${result.updated} student(s) enrolled in the selected class.`);
+      setBulkIds('');
+      await Promise.all([loadStudents(), refreshMetrics()]);
+    } catch (err) {
+      setError(err.friendlyMessage ?? extractErrorMessage(err));
+    } finally {
+      setBulkSaving(false);
+    }
+  }
+
   if (loading) return <LoadingPanel label="Loading students…" />;
 
   if (referenceError) {
@@ -255,10 +314,44 @@ export default function AdminStudents() {
           icon={Layers}
           label="Grades / sections"
           value={`${gradeLevels.length} / ${sections.length}`}
-          hint="Grades 9 – 12"
+          hint="Nursery through Grade 12"
           tone="slate"
         />
       </div>
+
+      <section className="card p-5">
+        <div className="mb-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Batch enrollment</p>
+          <h2 className="text-lg font-bold text-slate-900">Enroll students by ID</h2>
+          <p className="mt-1 text-sm text-slate-600">Paste student ID numbers separated by commas, spaces, or new lines. All IDs are validated before any student is moved.</p>
+        </div>
+        <form onSubmit={enrollStudentsInBulk} className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_1fr_1fr_auto]">
+          <label className="space-y-1 text-sm font-medium text-slate-700">
+            <span>Student ID numbers</span>
+            <textarea className="input min-h-20" value={bulkIds} onChange={(event) => setBulkIds(event.target.value)} maxLength={10000} placeholder="STU-001, STU-002" />
+          </label>
+          <label className="space-y-1 text-sm font-medium text-slate-700">
+            <span>Grade</span>
+            <select className="input" value={bulkGradeId} onChange={(event) => setBulkGradeId(event.target.value)} required>
+              <option value="">Choose grade</option>
+              {gradeLevels.map((grade) => <option key={grade.id} value={grade.id}>{grade.name}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm font-medium text-slate-700">
+            <span>Section</span>
+            <select className="input" value={bulkSectionId} onChange={(event) => setBulkSectionId(event.target.value)} required>
+              <option value="">Choose section</option>
+              {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+            </select>
+          </label>
+          <div className="flex items-end">
+            <button type="submit" className="btn-primary w-full" disabled={bulkSaving}>
+              {bulkSaving ? <Spinner className="size-4" /> : null}
+              {bulkSaving ? 'Enrolling…' : 'Enroll batch'}
+            </button>
+          </div>
+        </form>
+      </section>
 
       <section className="card">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
@@ -300,6 +393,25 @@ export default function AdminStudents() {
           <h2 className="font-semibold text-slate-900">Student roster</h2>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => downloadStudentRoster(false)}
+              disabled={downloadingPdf !== null}
+            >
+              {downloadingPdf === 'all' ? <Spinner className="size-4" /> : <Download className="size-4" aria-hidden="true" />}
+              {downloadingPdf === 'all' ? 'Downloading PDF…' : 'Export All Students PDF'}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => downloadStudentRoster(true)}
+              disabled={downloadingPdf !== null || !filters.gradeLevelId || !filters.sectionId}
+              title={!filters.gradeLevelId || !filters.sectionId ? 'Choose a grade and section first' : undefined}
+            >
+              {downloadingPdf === 'section' ? <Spinner className="size-4" /> : <Download className="size-4" aria-hidden="true" />}
+              {downloadingPdf === 'section' ? 'Downloading PDF…' : 'Export Section PDF'}
+            </button>
             <select
               className="input w-auto"
               value={filters.gradeLevelId}
@@ -359,8 +471,8 @@ export default function AdminStudents() {
             onCreated={async (result) => {
               setNotice(
                 result.temporaryPassword
-                  ? `${result.student.fullName} enrolled as ${result.student.studentIdNumber}. Temporary password: ${result.temporaryPassword}`
-                  : `${result.student.fullName} enrolled as ${result.student.studentIdNumber}.`,
+                  ? `${result.student.fullName} enrolled as ${result.student.studentIdNumber} (${result.student.email}). Temporary password: ${result.temporaryPassword}`
+                  : `${result.student.fullName} enrolled as ${result.student.studentIdNumber} (${result.student.email}).`,
               );
               await Promise.all([loadStudents(), refreshMetrics()]);
             }}

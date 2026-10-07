@@ -1,9 +1,7 @@
 namespace HaladeHighSchool.Api.Models;
 
 /// <summary>
-/// Keyless read model over the vw_StudentSubjectPerformance view. The weighted totals
-/// and letter grade are computed by SQL Server from published marks only, so the report
-/// card figures cannot drift from the weights held in the AssessmentTypes table.
+/// Keyless read model over the strict 100-point vw_StudentSubjectPerformance view.
 /// </summary>
 public class StudentSubjectPerformance
 {
@@ -13,8 +11,6 @@ public class StudentSubjectPerformance
 
     public decimal? QuizScore { get; set; }
 
-    public decimal? AssignmentScore { get; set; }
-
     public decimal? TestScore { get; set; }
 
     public decimal? MidExamScore { get; set; }
@@ -23,5 +19,7 @@ public class StudentSubjectPerformance
 
     public decimal TotalScore { get; set; }
 
-    public string LetterGrade { get; set; } = string.Empty;
+    public bool IsPassed { get; set; }
+
+    public string Status { get; set; } = "Fail";
 }

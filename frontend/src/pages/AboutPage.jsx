@@ -31,7 +31,7 @@ export default function AboutPage() {
           {loading ? <Skeleton className="h-9 w-80" /> : data.schoolName}
         </h1>
         <p className="mt-4 max-w-3xl text-slate-600">
-          A secondary school serving Grades 9 to 12. This portal is the single record of what is
+          A school serving Nursery through Grade 12. This portal is the single record of what is
           taught, who teaches it and how every student is progressing, so a question about a mark
           has one answer wherever it is asked.
         </p>

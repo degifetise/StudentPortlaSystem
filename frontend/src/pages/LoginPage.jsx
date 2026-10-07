@@ -63,7 +63,7 @@ export default function LoginPage() {
           </span>
           <div>
             <p className="text-lg font-bold">{schoolName}</p>
-            <p className="text-sm text-brand-200">Grades 9 – 12</p>
+            <p className="text-sm text-brand-200">Nursery – Grade 12</p>
           </div>
         </div>
 
@@ -130,7 +130,7 @@ export default function LoginPage() {
             </span>
             <div>
               <p className="font-bold text-slate-900">{schoolName}</p>
-              <p className="text-xs text-slate-500">Grades 9 – 12 portal</p>
+              <p className="text-xs text-slate-500">Nursery – Grade 12 portal</p>
             </div>
           </div>
 
@@ -156,6 +156,16 @@ export default function LoginPage() {
             {sessionMessage && (
               <Alert variant="warning" className="mb-4" onDismiss={clearSessionMessage}>
                 {sessionMessage}
+              </Alert>
+            )}
+
+            {location.state?.alert && (
+              <Alert
+                variant="warning"
+                className="mb-4"
+                onDismiss={() => navigate(location.pathname, { replace: true, state: null })}
+              >
+                {location.state.alert}
               </Alert>
             )}
 
@@ -199,7 +209,7 @@ export default function LoginPage() {
                   required
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
-                  placeholder="you@haladehighschool.edu"
+                  placeholder="you@education.edu"
                 />
               </div>
 

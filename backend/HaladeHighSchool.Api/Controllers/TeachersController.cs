@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace HaladeHighSchool.Api.Controllers;
 
@@ -16,7 +17,7 @@ namespace HaladeHighSchool.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/teachers")]
-[Authorize]
+[Authorize(Roles = Roles.AdminOrTeacher)]
 [Produces("application/json")]
 public class TeachersController : PortalControllerBase
 {
@@ -25,6 +26,7 @@ public class TeachersController : PortalControllerBase
     private readonly ApplicationDbContext _db;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly IAccountProvisioningService _provisioning;
+    private readonly IProfilePhotoStorage _photoStorage;
     private readonly ISystemSettingsService _settings;
     private readonly ILogger<TeachersController> _logger;
 
@@ -32,12 +34,14 @@ public class TeachersController : PortalControllerBase
         ApplicationDbContext db,
         UserManager<ApplicationUser> userManager,
         IAccountProvisioningService provisioning,
+        IProfilePhotoStorage photoStorage,
         ISystemSettingsService settings,
         ILogger<TeachersController> logger)
     {
         _db = db;
         _userManager = userManager;
         _provisioning = provisioning;
+        _photoStorage = photoStorage;
         _settings = settings;
         _logger = logger;
     }
@@ -73,20 +77,43 @@ public class TeachersController : PortalControllerBase
     public async Task<ActionResult<IEnumerable<TeachingAssignmentResponse>>> GetMyClasses(
         CancellationToken cancellationToken)
     {
-        var teacherId = User.GetTeacherId();
-        if (teacherId is null)
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        try
         {
-            return ForbiddenProblem("Your account is not linked to a teacher profile.");
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return NotFound(new { message = "Teacher profile is not linked to this user account." });
+            }
+
+            var teacher = await _db.Teachers
+                .AsNoTracking()
+                .Where(t => t.UserId == userId && t.IsActive)
+                .Select(t => new { t.Id })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (teacher is null)
+            {
+                return NotFound(new { message = "Teacher profile is not linked to this user account." });
+            }
+
+            var classes = await ProjectAssignments(
+                    _db.TeacherSubjects.AsNoTracking().Where(ts => ts.TeacherId == teacher.Id && ts.IsActive))
+                .OrderBy(a => a.GradeLevelId)
+                .ThenBy(a => a.SubjectName)
+                .ThenBy(a => a.SectionName)
+                .ToListAsync(cancellationToken);
+
+            return Ok(classes);
         }
-
-        var classes = await ProjectAssignments(
-                _db.TeacherSubjects.AsNoTracking().Where(ts => ts.TeacherId == teacherId && ts.IsActive))
-            .OrderBy(a => a.GradeLevelId)
-            .ThenBy(a => a.SubjectName)
-            .ThenBy(a => a.SectionName)
-            .ToListAsync(cancellationToken);
-
-        return Ok(classes);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load class roster for section {ClassId}", "me/classes");
+            return Problem(
+                title: "Unable to load assigned classes",
+                detail: "Your assigned classes could not be loaded.",
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
     }
 
     /// <summary>
@@ -105,66 +132,134 @@ public class TeachersController : PortalControllerBase
         int assignmentId,
         CancellationToken cancellationToken)
     {
-        var teacherId = User.GetTeacherId();
-        if (teacherId is null)
+        try
         {
-            return ForbiddenProblem("Your account is not linked to a teacher profile.");
-        }
-
-        var assignment = await _db.TeacherSubjects
-            .AsNoTracking()
-            .Where(ts => ts.Id == assignmentId && ts.TeacherId == teacherId && ts.IsActive)
-            .Select(ts => new
+            if (!await _db.Database.CanConnectAsync(cancellationToken))
             {
-                ts.Id,
-                ts.SubjectId,
-                SubjectName = ts.Subject!.SubjectName,
-                SubjectCode = ts.Subject!.Code,
-                ts.SectionId,
-                SectionName = ts.Section!.Name,
-                GradeLevelId = ts.Subject!.GradeLevelId,
-                GradeLevelName = ts.Subject!.GradeLevel!.Name,
-                ts.AcademicYear
-            })
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (assignment is null)
-        {
-            // Not "forbidden": an assignment that is not this teacher's own does not exist to them.
-            return NotFoundProblem("That class is not one of yours, or it is no longer active.");
-        }
-
-        var students = await _db.Students
-            .AsNoTracking()
-            .Where(s => s.SectionId == assignment.SectionId
-                     && s.GradeLevelId == assignment.GradeLevelId)
-            .OrderBy(s => s.StudentIdNumber)
-            .Select(s => new
-            {
-                s.Id,
-                s.StudentIdNumber,
-                FullName = s.User != null ? s.User.FullName : string.Empty,
-                Email = s.User != null ? s.User.Email : null,
-                s.Gender,
-                s.IsActive
-            })
-            .ToListAsync(cancellationToken);
-
-        var studentIds = students.Select(s => s.Id).ToList();
-
-        var performance = await _db.StudentSubjectPerformances
-            .AsNoTracking()
-            .Where(p => p.SubjectId == assignment.SubjectId && studentIds.Contains(p.StudentId))
-            .ToListAsync(cancellationToken);
-
-        var passMark = await _settings.GetPassMarkPercentageAsync(cancellationToken);
-        var byStudent = performance.ToDictionary(p => p.StudentId);
-
-        var roster = students
-            .Select(s =>
-            {
-                if (!byStudent.TryGetValue(s.Id, out var row))
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new
                 {
+                    message = "Database connection unavailable. Please check SQL Server service."
+                });
+            }
+
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return NotFound(new { message = "Teacher profile not found" });
+            }
+
+            var teacher = await _db.Teachers
+                .AsNoTracking()
+                .Where(t => t.UserId == userId && t.IsActive)
+                .Select(t => new { t.Id })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (teacher is null)
+            {
+                return NotFound(new { message = "Teacher profile not found" });
+            }
+
+            var assignment = await _db.TeacherSubjects
+                .AsNoTracking()
+                .Where(ts => ts.Id == assignmentId && ts.TeacherId == teacher.Id && ts.IsActive)
+                .Select(ts => new
+                {
+                    ts.Id,
+                    ts.SubjectId,
+                    SubjectName = ts.Subject != null ? ts.Subject.SubjectName : string.Empty,
+                    SubjectCode = ts.Subject != null ? ts.Subject.Code : string.Empty,
+                    ts.SectionId,
+                    SectionName = ts.Section != null ? ts.Section.Name : string.Empty,
+                    GradeLevelId = ts.Subject != null ? ts.Subject.GradeLevelId : 0,
+                    GradeLevelName = ts.Subject != null && ts.Subject.GradeLevel != null
+                        ? ts.Subject.GradeLevel.Name
+                        : string.Empty,
+                    ts.AcademicYear
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (assignment is null || assignment.SubjectId == 0 || assignment.SectionId == 0)
+            {
+                return NotFound(new { message = "Class section not found or access denied" });
+            }
+
+            var students = await _db.Students
+                .AsNoTracking()
+                .Where(s => s.SectionId == assignment.SectionId
+                         && s.GradeLevelId == assignment.GradeLevelId)
+                .OrderBy(s => s.StudentIdNumber)
+                .Select(s => new
+                {
+                    s.Id,
+                    s.StudentIdNumber,
+                    FullName = s.User != null ? s.User.FullName : "Unknown",
+                    Email = s.User != null ? s.User.Email : null,
+                    s.Gender,
+                    s.IsActive
+                })
+                .ToListAsync(cancellationToken);
+
+            if (students.Count == 0)
+            {
+                return Ok(new ClassRosterResponse
+                {
+                    AssignmentId = assignment.Id,
+                    SubjectId = assignment.SubjectId,
+                    SubjectName = assignment.SubjectName,
+                    SubjectCode = assignment.SubjectCode,
+                    SectionId = assignment.SectionId,
+                    SectionName = assignment.SectionName,
+                    GradeLevelName = assignment.GradeLevelName,
+                    AcademicYear = assignment.AcademicYear,
+                    PassMarkPercentage = 50m,
+                    Students = []
+                });
+            }
+
+            var studentIds = students.Select(s => s.Id).ToList();
+
+            var performance = await _db.StudentSubjectPerformances
+                .AsNoTracking()
+                .Where(p => p.SubjectId == assignment.SubjectId && studentIds.Contains(p.StudentId))
+                .Select(p => new
+                {
+                    p.StudentId,
+                    p.QuizScore,
+                    p.TestScore,
+                    p.MidExamScore,
+                    p.FinalExamScore,
+                    p.TotalScore,
+                    p.IsPassed,
+                    p.Status
+                })
+                .ToListAsync(cancellationToken);
+
+            const decimal passMark = 50m;
+            var byStudent = performance
+                .GroupBy(p => p.StudentId)
+                .ToDictionary(group => group.Key, group => group.First());
+
+            var roster = students
+                .Select(s =>
+                {
+                    if (!byStudent.TryGetValue(s.Id, out var row))
+                    {
+                        return new ClassRosterEntry
+                        {
+                            StudentId = s.Id,
+                            StudentIdNumber = s.StudentIdNumber,
+                            FullName = s.FullName,
+                            Email = s.Email,
+                            Gender = s.Gender,
+                            IsActive = s.IsActive
+                        };
+                    }
+
+                    var marked = new[]
+                    {
+                        row.QuizScore, row.TestScore, row.MidExamScore, row.FinalExamScore
+                    }.Count(score => score is not null);
+
                     return new ClassRosterEntry
                     {
                         StudentId = s.Id,
@@ -172,51 +267,44 @@ public class TeachersController : PortalControllerBase
                         FullName = s.FullName,
                         Email = s.Email,
                         Gender = s.Gender,
-                        IsActive = s.IsActive
+                        IsActive = s.IsActive,
+                        TotalScore = row.TotalScore,
+                        Status = row.Status,
+                        IsPassed = row.IsPassed,
+                        ComponentsMarked = marked
                     };
-                }
+                })
+                .ToList();
 
-                var marked = new[]
-                {
-                    row.QuizScore, row.AssignmentScore, row.TestScore, row.MidExamScore, row.FinalExamScore
-                }.Count(score => score is not null);
+            var scored = roster.Where(r => r.TotalScore is not null).ToList();
 
-                return new ClassRosterEntry
-                {
-                    StudentId = s.Id,
-                    StudentIdNumber = s.StudentIdNumber,
-                    FullName = s.FullName,
-                    Email = s.Email,
-                    Gender = s.Gender,
-                    IsActive = s.IsActive,
-                    TotalScore = row.TotalScore,
-                    LetterGrade = row.LetterGrade,
-                    IsPass = row.TotalScore >= passMark,
-                    ComponentsMarked = marked
-                };
-            })
-            .ToList();
-
-        var scored = roster.Where(r => r.TotalScore is not null).ToList();
-
-        return Ok(new ClassRosterResponse
+            return Ok(new ClassRosterResponse
+            {
+                AssignmentId = assignment.Id,
+                SubjectId = assignment.SubjectId,
+                SubjectName = assignment.SubjectName,
+                SubjectCode = assignment.SubjectCode,
+                SectionId = assignment.SectionId,
+                SectionName = assignment.SectionName,
+                GradeLevelName = assignment.GradeLevelName,
+                AcademicYear = assignment.AcademicYear,
+                PassMarkPercentage = passMark,
+                ClassAverage = scored.Count == 0
+                    ? null
+                    : Math.Round(scored.Average(r => r.TotalScore!.Value), 2),
+                MarkedCount = scored.Count,
+                PassCount = scored.Count(r => r.IsPassed == true),
+                Students = roster
+            });
+        }
+        catch (Exception ex)
         {
-            AssignmentId = assignment.Id,
-            SubjectId = assignment.SubjectId,
-            SubjectName = assignment.SubjectName,
-            SubjectCode = assignment.SubjectCode,
-            SectionId = assignment.SectionId,
-            SectionName = assignment.SectionName,
-            GradeLevelName = assignment.GradeLevelName,
-            AcademicYear = assignment.AcademicYear,
-            PassMarkPercentage = passMark,
-            ClassAverage = scored.Count == 0
-                ? null
-                : Math.Round(scored.Average(r => r.TotalScore!.Value), 2),
-            MarkedCount = scored.Count,
-            PassCount = scored.Count(r => r.IsPass == true),
-            Students = roster
-        });
+            _logger.LogError(ex, "Error fetching students for class section {ClassId}", assignmentId);
+            return Problem(
+                title: "Unable to load class students",
+                detail: "The class roster could not be loaded.",
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -302,24 +390,70 @@ public class TeachersController : PortalControllerBase
     [Authorize(Roles = Roles.Admin)]
     [ProducesResponseType<CreateTeacherResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<CreateTeacherResponse>> CreateTeacher(
+    public Task<ActionResult<CreateTeacherResponse>> CreateTeacher(
         CreateTeacherRequest request,
+        CancellationToken cancellationToken) =>
+        CreateTeacherCore(request, null, cancellationToken);
+
+    [HttpPost("with-photo")]
+    [Authorize(Roles = Roles.Admin)]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit((2 * 1024 * 1024) + (64 * 1024))]
+    [ProducesResponseType<CreateTeacherResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public Task<ActionResult<CreateTeacherResponse>> CreateTeacherWithPhoto(
+        [FromForm] CreateTeacherRequest request,
+        CancellationToken cancellationToken) =>
+        CreateTeacherCore(request, request.Photo, cancellationToken);
+
+    private async Task<ActionResult<CreateTeacherResponse>> CreateTeacherCore(
+        CreateTeacherRequest request,
+        IFormFile? photo,
         CancellationToken cancellationToken)
     {
-        var result = await _provisioning.CreateTeacherAsync(new ProvisionTeacherRequest
+        string? photoUrl = null;
+        try
         {
-            Email = request.Email,
-            Password = request.Password,
-            FullName = request.FullName,
-            EmployeeId = request.EmployeeId,
-            Specialization = request.Specialization,
-            Qualification = request.Qualification,
-            PhoneNumber = request.PhoneNumber,
-            HireDate = request.HireDate
-        }, cancellationToken);
+            if (photo is not null)
+            {
+                photoUrl = await _photoStorage.SaveAsync(photo, cancellationToken);
+            }
+        }
+        catch (InvalidProfilePhotoException ex)
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Invalid profile photo",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+
+        ProvisionResult<Teacher> result;
+        try
+        {
+            result = await _provisioning.CreateTeacherAsync(new ProvisionTeacherRequest
+            {
+                Email = request.Email,
+                Password = request.Password,
+                FullName = request.FullName,
+                EmployeeId = request.EmployeeId,
+                Specialization = request.Specialization,
+                Qualification = request.Qualification,
+                PhoneNumber = request.PhoneNumber,
+                HireDate = request.HireDate,
+                PhotoUrl = photoUrl,
+            }, cancellationToken);
+        }
+        catch
+        {
+            await _photoStorage.DeleteAsync(photoUrl);
+            throw;
+        }
 
         if (!result.Succeeded || result.Entity is null)
         {
+            await _photoStorage.DeleteAsync(photoUrl);
             return BadRequest(new ValidationProblemDetails
             {
                 Title = "Teacher not created",
@@ -641,6 +775,64 @@ public class TeachersController : PortalControllerBase
         await _db.SaveChangesAsync(cancellationToken);
 
         return NoContent();
+    }
+
+    /// <summary>Reassigns an active subject/section assignment to another active teacher.</summary>
+    [HttpPut("~/api/admin/teacher-assignments/{assignmentId:int}")]
+    [Authorize(Roles = Roles.Admin)]
+    [ProducesResponseType<TeachingAssignmentResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<TeachingAssignmentResponse>> ReassignAssignment(
+        int assignmentId,
+        ReassignTeachingAssignmentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var assignment = await _db.TeacherSubjects
+            .FirstOrDefaultAsync(ts => ts.Id == assignmentId, cancellationToken);
+
+        if (assignment is null)
+        {
+            return NotFoundProblem($"Assignment {assignmentId} was not found.");
+        }
+
+        if (!assignment.IsActive)
+        {
+            return ConflictProblem("Assignment is inactive", "Only active teaching assignments can be reassigned.");
+        }
+
+        var teacher = await _db.Teachers
+            .AsNoTracking()
+            .AnyAsync(t => t.Id == request.TeacherId && t.IsActive, cancellationToken);
+
+        if (!teacher)
+        {
+            return NotFoundProblem($"Active teacher {request.TeacherId} was not found.");
+        }
+
+        var alreadyAssigned = await _db.TeacherSubjects.AnyAsync(
+            ts => ts.Id != assignmentId
+                && ts.TeacherId == request.TeacherId
+                && ts.SubjectId == assignment.SubjectId
+                && ts.SectionId == assignment.SectionId
+                && ts.AcademicYear == assignment.AcademicYear,
+            cancellationToken);
+
+        if (alreadyAssigned)
+        {
+            return ConflictProblem(
+                "Teacher already assigned",
+                "The selected teacher already has this subject and section for the academic year.");
+        }
+
+        assignment.TeacherId = request.TeacherId;
+        await _db.SaveChangesAsync(cancellationToken);
+
+        var response = await ProjectAssignments(
+                _db.TeacherSubjects.AsNoTracking().Where(ts => ts.Id == assignmentId))
+            .FirstAsync(cancellationToken);
+
+        return Ok(response);
     }
 
     private static IQueryable<TeacherDetailResponse> ProjectDetail(IQueryable<Teacher> query) =>

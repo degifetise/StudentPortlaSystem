@@ -1,16 +1,19 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import {
   Award,
   CalendarDays,
   ChevronDown,
+  Download,
   GraduationCap,
   Percent,
+  ScrollText,
   TrendingUp,
 } from 'lucide-react';
-import { studentApi } from '../../services/endpoints';
+import { reportPdfApi, studentApi } from '../../services/endpoints';
 import { useApiResource } from '../../hooks/useApiResource';
-import { Badge, EmptyState, ErrorState, LoadingPanel } from '../../components/ui/Feedback';
+import { Alert, Badge, EmptyState, ErrorState, LoadingPanel, Spinner } from '../../components/ui/Feedback';
 
 /** Mirrors the CASE expression in vw_StudentSubjectPerformance. */
 const GRADE_TONES = { A: 'green', B: 'green', C: 'amber', D: 'amber', F: 'red' };
@@ -98,18 +101,41 @@ function WeightBreakdown({ subject, weights }) {
 
 export default function MyResults() {
   const [expanded, setExpanded] = useState(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [downloadError, setDownloadError] = useState(null);
+  const navigate = useNavigate();
 
   // One call: the endpoint returns the subject rows together with the weighting they were
   // derived from, and a component score means nothing without the share it carries.
   const fetchResults = useCallback(() => studentApi.myResults(), []);
 
-  const { data: reportCard, error, loading, reload, reloading } = useApiResource(fetchResults);
+  const {
+    data: reportCard,
+    error,
+    errorStatus,
+    loading,
+    reload,
+    reloading,
+  } = useApiResource(fetchResults);
+  const fetchTranscript = useCallback(() => studentApi.myTranscript(), []);
+  const { data: transcript, loading: transcriptLoading } = useApiResource(fetchTranscript);
 
-  const weights = reportCard?.gradingWeights ?? [];
+  useEffect(() => {
+    if (errorStatus !== 401) return;
+
+    navigate('/login', {
+      replace: true,
+      state: {
+        alert: 'Your session has expired. Please sign in again to view your academic results.',
+      },
+    });
+  }, [errorStatus, navigate]);
+
+  const weights = Array.isArray(reportCard?.gradingWeights) ? reportCard.gradingWeights : [];
 
   // GPA is the one figure the API does not carry: the 4.0 mapping is a presentation choice.
   const stats = useMemo(() => {
-    const subjects = reportCard?.subjects ?? [];
+    const subjects = Array.isArray(reportCard?.subjects) ? reportCard.subjects : [];
     if (subjects.length === 0) return null;
 
     const summary = reportCard.summary ?? {};
@@ -130,6 +156,14 @@ export default function MyResults() {
   if (loading) return <LoadingPanel label="Loading your report card…" />;
 
   if (error) {
+    if (errorStatus === 500) {
+      return (
+        <Alert variant="warning" title="Results temporarily unavailable">
+          Your results are currently being processed. Please contact your school administrator.
+        </Alert>
+      );
+    }
+
     return (
       <ErrorState
         title="Could not load your results"
@@ -140,10 +174,27 @@ export default function MyResults() {
     );
   }
 
-  const subjects = reportCard?.subjects ?? [];
+  const subjects = Array.isArray(reportCard?.subjects) ? reportCard.subjects : [];
+
+  async function downloadResultsPdf() {
+    setDownloadingPdf(true);
+    setDownloadError(null);
+    try {
+      await reportPdfApi.studentResults();
+    } catch (err) {
+      setDownloadError(err.friendlyMessage ?? err.message ?? 'The academic result PDF could not be downloaded.');
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
+      {downloadError && (
+        <Alert variant="error" title="PDF download failed" onDismiss={() => setDownloadError(null)}>
+          {downloadError}
+        </Alert>
+      )}
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">My results</h1>
@@ -153,7 +204,18 @@ export default function MyResults() {
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {subjects.length > 0 && (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={downloadResultsPdf}
+              disabled={downloadingPdf}
+            >
+              {downloadingPdf ? <Spinner className="size-4" /> : <Download className="size-4" aria-hidden="true" />}
+              {downloadingPdf ? 'Downloading PDF…' : 'Download Academic Result PDF'}
+            </button>
+          )}
           {reportCard?.academicYear && (
             <Badge tone="slate">
               <CalendarDays className="size-3" aria-hidden="true" />
@@ -171,7 +233,7 @@ export default function MyResults() {
         <EmptyState
           icon={GraduationCap}
           title="No published results yet"
-          description="Your teachers have not published any marks for this academic year. Results appear here as soon as they do."
+          description="No grade records published for this semester yet. Your results appear here as soon as marks are published."
         />
       ) : (
         <>
@@ -264,6 +326,79 @@ export default function MyResults() {
           </section>
         </>
       )}
+
+      <section className="card">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+          <div>
+            <h2 className="flex items-center gap-2 font-semibold text-slate-900">
+              <ScrollText className="size-4 text-brand-600" aria-hidden="true" />
+              Grade 11–12 transcript
+            </h2>
+            <p className="text-xs text-slate-500">
+              Published subject results across your senior years, weighted by credit hours.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Badge tone="brand">Cumulative GPA {transcript?.cumulativeGPA ?? '—'}</Badge>
+            <Badge tone="slate">{transcript?.totalCreditHours ?? 0} credit hours</Badge>
+          </div>
+        </div>
+
+        {transcriptLoading ? (
+          <p className="px-5 py-6 text-sm text-slate-500">Loading transcript…</p>
+        ) : transcript?.terms?.length ? (
+          <div className="divide-y divide-slate-100">
+            {transcript.terms.map((term) => (
+              <div key={`${term.academicYear}-${term.gradeLevel}`} className="px-5 py-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-semibold text-slate-800">Grade {term.gradeLevel}</h3>
+                    <p className="text-xs text-slate-500">{term.academicYear}</p>
+                  </div>
+                  <Badge tone="slate">GPA {term.gpa ?? '—'}</Badge>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[620px] text-left text-sm">
+                    <thead className="text-xs text-slate-500">
+                      <tr>
+                        <th className="pb-2 font-medium">Subject</th>
+                        <th className="pb-2 font-medium">Credits</th>
+                        <th className="pb-2 font-medium">Score</th>
+                        <th className="pb-2 font-medium">Grade</th>
+                        <th className="pb-2 text-right font-medium">Points</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {term.subjects.map((subject) => (
+                        <tr key={`${term.academicYear}-${subject.subjectId}`}>
+                          <td className="py-2">
+                            <p className="font-medium text-slate-800">{subject.subjectName}</p>
+                            <p className="text-xs text-slate-500">{subject.subjectCode}</p>
+                          </td>
+                          <td className="py-2 text-slate-600">{subject.creditHours}</td>
+                          <td className="py-2 text-slate-600">{formatScore(subject.totalScore)}</td>
+                          <td className="py-2">
+                            <Badge tone={GRADE_TONES[subject.letterGrade] ?? 'slate'}>
+                              {subject.letterGrade}
+                            </Badge>
+                          </td>
+                          <td className="py-2 text-right font-semibold text-slate-700">
+                            {formatScore(subject.gradePoints)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="px-5 py-6 text-sm text-slate-500">
+            No published Grade 11–12 results are available yet.
+          </p>
+        )}
+      </section>
     </div>
   );
 }

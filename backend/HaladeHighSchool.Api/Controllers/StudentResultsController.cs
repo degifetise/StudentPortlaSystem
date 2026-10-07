@@ -1,8 +1,11 @@
 using HaladeHighSchool.Api.Configuration;
+using HaladeHighSchool.Api.Data;
 using HaladeHighSchool.Api.DTOs;
 using HaladeHighSchool.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 namespace HaladeHighSchool.Api.Controllers;
 
@@ -17,11 +20,18 @@ namespace HaladeHighSchool.Api.Controllers;
 [Produces("application/json")]
 public class StudentResultsController : ControllerBase
 {
+    private readonly ApplicationDbContext _db;
     private readonly IReportCardService _reportCards;
+    private readonly ILogger<StudentResultsController> _logger;
 
-    public StudentResultsController(IReportCardService reportCards)
+    public StudentResultsController(
+        ApplicationDbContext db,
+        IReportCardService reportCards,
+        ILogger<StudentResultsController> logger)
     {
+        _db = db;
         _reportCards = reportCards;
+        _logger = logger;
     }
 
     /// <summary>
@@ -38,32 +48,59 @@ public class StudentResultsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<MyResultsResponse>> GetMyResults(CancellationToken cancellationToken)
     {
-        var studentId = User.GetStudentId();
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        /* A Student-role account with no student record is a provisioning fault rather than a
-           bad request, so it is reported as such instead of an empty report card. */
+        try
+        {
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return NotFound(new { message = "Student profile record not found." });
+            }
+
+            var student = await _db.Students
+                .AsNoTracking()
+                .Where(s => s.UserId == userId)
+                .Select(s => new { s.Id })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (student is null)
+            {
+                return NotFound(new { message = "Student profile record not found." });
+            }
+
+            var results = await _reportCards.BuildMyResultsAsync(student.Id, cancellationToken);
+            return results is null
+                ? NotFound(new { message = "Student profile record not found." })
+                : Ok(results);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error loading academic results for student user {UserId}", userId);
+            return Problem(
+                title: "Academic results unavailable",
+                detail: "Your results are currently being processed.",
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
+    }
+
+    /// <summary>Published Grade 11-12 subject history with term and cumulative GPA.</summary>
+    [HttpGet("my-transcript")]
+    [ProducesResponseType<TranscriptResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<TranscriptResponse>> GetMyTranscript(CancellationToken cancellationToken)
+    {
+        var studentId = User.GetStudentId();
         if (studentId is null)
         {
             return NotFound(new ProblemDetails
             {
                 Title = "No student profile",
                 Detail = "This account is not linked to a student record. Contact the school office.",
-                Status = StatusCodes.Status404NotFound,
+                Status = StatusCodes.Status404NotFound
             });
         }
 
-        var results = await _reportCards.BuildMyResultsAsync(studentId.Value, cancellationToken);
-
-        if (results is null)
-        {
-            return NotFound(new ProblemDetails
-            {
-                Title = "No student profile",
-                Detail = "The linked student record no longer exists. Contact the school office.",
-                Status = StatusCodes.Status404NotFound,
-            });
-        }
-
-        return Ok(results);
+        var transcript = await _reportCards.BuildTranscriptAsync(studentId.Value, cancellationToken);
+        return transcript is null ? NotFound() : Ok(transcript);
     }
 }

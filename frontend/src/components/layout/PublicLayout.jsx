@@ -1,12 +1,17 @@
 import { Outlet } from 'react-router-dom';
 import TopNavBar from './TopNavBar';
 import SiteFooter from './SiteFooter';
+import { useAuth } from '../../context/AuthContext';
+import DashboardLayout from './DashboardLayout';
 
 /**
  * Shell for the pages anyone can read. Identical chrome to the signed-in areas, so following
  * a link from Home into a dashboard does not feel like arriving at a different site.
  */
 export default function PublicLayout() {
+  const { isAuthenticated } = useAuth();
+  if (isAuthenticated) return <DashboardLayout />;
+
   return (
     <div className="flex min-h-screen flex-col">
       <TopNavBar />

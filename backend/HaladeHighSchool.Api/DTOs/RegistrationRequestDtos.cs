@@ -8,10 +8,11 @@ public record RegistrationRequestResponse
     public int Id { get; init; }
     public string FullName { get; init; } = string.Empty;
     public string ContactEmail { get; init; } = string.Empty;
-    public int GradeLevelId { get; init; }
-    public string GradeLevelName { get; init; } = string.Empty;
-    public int SectionId { get; init; }
-    public string SectionName { get; init; } = string.Empty;
+    public string RequestedRole { get; init; } = "Student";
+    public int? GradeLevelId { get; init; }
+    public string? GradeLevelName { get; init; }
+    public int? SectionId { get; init; }
+    public string? SectionName { get; init; }
     public string Status { get; init; } = string.Empty;
     public DateTime SubmittedAt { get; init; }
 
@@ -44,11 +45,14 @@ public record ReviewRegistrationRequest
 public record ApprovedRegistrationResponse
 {
     public int RequestId { get; init; }
-    public int StudentId { get; init; }
+    public string RequestedRole { get; init; } = "Student";
+    public int? StudentId { get; init; }
+    public int? TeacherId { get; init; }
     public string FullName { get; init; } = string.Empty;
 
     /// <summary>Auto-generated, of the form HHS-{year}-{sequence}.</summary>
-    public string StudentIdNumber { get; init; } = string.Empty;
+    public string? StudentIdNumber { get; init; }
+    public string? EmployeeId { get; init; }
 
     /// <summary>The generated sign-in address, derived from the student number.</summary>
     public string IssuedEmail { get; init; } = string.Empty;
@@ -59,8 +63,8 @@ public record ApprovedRegistrationResponse
     /// <summary>Shown once. Not recoverable.</summary>
     public string TemporaryPassword { get; init; } = string.Empty;
 
-    public string GradeLevelName { get; init; } = string.Empty;
-    public string SectionName { get; init; } = string.Empty;
+    public string? GradeLevelName { get; init; }
+    public string? SectionName { get; init; }
     public DateTime ApprovedAt { get; init; }
     public string Message { get; init; } = string.Empty;
 }

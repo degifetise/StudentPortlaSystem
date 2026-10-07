@@ -4,16 +4,18 @@ import {
   Check,
   ClipboardCheck,
   Copy,
+  Download,
   Inbox,
   KeyRound,
   RefreshCw,
   UserPlus,
   X,
 } from 'lucide-react';
-import { registrationApi, teacherApi } from '../../services/endpoints';
+import { registrationApi, reportPdfApi, staffApi, teacherApi } from '../../services/endpoints';
 import { extractErrorMessage } from '../../services/api';
 import { useSchoolInfo } from '../../context/SchoolInfoContext';
 import { Alert, Badge, EmptyState, ErrorState, LoadingPanel, Spinner } from '../../components/ui/Feedback';
+import ProfilePhotoField from '../../components/auth/ProfilePhotoField';
 import { PAGE_SIZE, Pager, PeopleTable, RowActions, SearchBox, totalPagesOf } from './adminShared';
 
 const REVIEW_TABS = [
@@ -24,12 +26,18 @@ const REVIEW_TABS = [
 
 function NewTeacherForm({ onCreated, onError }) {
   const [form, setForm] = useState({ fullName: '', email: '', specialization: '' });
+  const [photo, setPhoto] = useState(null);
+  const [photoPending, setPhotoPending] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const update = (key) => (event) => setForm((prev) => ({ ...prev, [key]: event.target.value }));
 
   async function submit(event) {
     event.preventDefault();
+    if (photoPending) {
+      onError('Confirm or cancel the selected photo before adding the teacher.');
+      return;
+    }
     setSaving(true);
     onError(null);
 
@@ -38,8 +46,10 @@ function NewTeacherForm({ onCreated, onError }) {
         fullName: form.fullName.trim(),
         email: form.email.trim(),
         specialization: form.specialization.trim() || null,
+        photo,
       });
       setForm({ fullName: '', email: '', specialization: '' });
+      setPhoto(null);
       onCreated(result);
     } catch (err) {
       onError(err.friendlyMessage ?? extractErrorMessage(err));
@@ -50,6 +60,12 @@ function NewTeacherForm({ onCreated, onError }) {
 
   return (
     <form onSubmit={submit} className="grid gap-3 border-t border-slate-200 p-4 sm:grid-cols-4">
+      <ProfilePhotoField
+        file={photo}
+        onChange={setPhoto}
+        onPendingChange={setPhotoPending}
+        disabled={saving}
+      />
       <input
         className="input"
         placeholder="Full name"
@@ -61,7 +77,7 @@ function NewTeacherForm({ onCreated, onError }) {
       <input
         className="input"
         type="email"
-        placeholder="teacher@haladehighschool.edu"
+        placeholder="teacher@example.com"
         required
         value={form.email}
         onChange={update('email')}
@@ -82,6 +98,74 @@ function NewTeacherForm({ onCreated, onError }) {
   );
 }
 
+function NewStaffForm({ onCreated, onError }) {
+  const [form, setForm] = useState({ fullName: '', email: '' });
+  const [photo, setPhoto] = useState(null);
+  const [photoPending, setPhotoPending] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const update = (key) => (event) => setForm((prev) => ({ ...prev, [key]: event.target.value }));
+
+  async function submit(event) {
+    event.preventDefault();
+    if (photoPending) {
+      onError('Confirm or cancel the selected photo before adding staff.');
+      return;
+    }
+    setSaving(true);
+    onError(null);
+
+    try {
+      const result = await staffApi.create({
+        fullName: form.fullName.trim(),
+        email: form.email.trim(),
+        photo,
+      });
+      setForm({ fullName: '', email: '' });
+      setPhoto(null);
+      onCreated(result);
+    } catch (err) {
+      onError(err.friendlyMessage ?? extractErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="grid gap-3 border-t border-slate-200 p-4 sm:grid-cols-3">
+      <ProfilePhotoField
+        file={photo}
+        onChange={setPhoto}
+        onPendingChange={setPhotoPending}
+        disabled={saving}
+      />
+      <input
+        className="input"
+        placeholder="Full name"
+        required
+        maxLength={150}
+        value={form.fullName}
+        onChange={update('fullName')}
+        aria-label="Staff full name"
+      />
+      <input
+        className="input"
+        type="email"
+        placeholder="staff@example.com"
+        required
+        maxLength={256}
+        value={form.email}
+        onChange={update('email')}
+        aria-label="Staff email"
+      />
+      <button type="submit" className="btn-primary" disabled={saving}>
+        {saving ? <Spinner className="size-4" /> : <UserPlus className="size-4" aria-hidden="true" />}
+        Add staff
+      </button>
+    </form>
+  );
+}
+
 /**
  * The credentials an approval issued. Kept on screen until dismissed rather than shown as a
  * passing toast: the temporary password is not stored in readable form, so if it is lost here
@@ -91,11 +175,11 @@ function IssuedCredentials({ issued, onDismiss }) {
   const [copied, setCopied] = useState(false);
 
   const summary = [
-    `Student: ${issued.fullName}`,
-    `Student number: ${issued.studentIdNumber}`,
+    `${issued.requestedRole}: ${issued.fullName}`,
+    `${issued.requestedRole === 'Teacher' ? 'Employee ID' : 'Student number'}: ${issued.employeeId ?? issued.studentIdNumber}`,
     `Sign-in address: ${issued.issuedEmail}`,
     `Temporary password: ${issued.temporaryPassword}`,
-    `Class: ${issued.gradeLevelName} ${issued.sectionName}`,
+    ...(issued.requestedRole === 'Student' ? [`Class: ${issued.gradeLevelName} ${issued.sectionName}`] : []),
   ].join('\n');
 
   async function copy() {
@@ -118,16 +202,16 @@ function IssuedCredentials({ issued, onDismiss }) {
         <KeyRound className="size-5 shrink-0 text-emerald-700" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <h2 className="font-semibold text-emerald-900">
-            {issued.fullName} is enrolled — send these credentials now
+            {issued.fullName} is approved as a {issued.requestedRole.toLowerCase()} — send these credentials now
           </h2>
           <p className="mt-1 text-sm text-emerald-800">{issued.message}</p>
 
           <dl className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
             <div>
               <dt className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
-                Student number
+                {issued.requestedRole === 'Teacher' ? 'Employee ID' : 'Student number'}
               </dt>
-              <dd className="font-mono text-slate-900">{issued.studentIdNumber}</dd>
+              <dd className="font-mono text-slate-900">{issued.employeeId ?? issued.studentIdNumber}</dd>
             </div>
             <div>
               <dt className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
@@ -186,7 +270,7 @@ function RegistrationCard({ row, busy, onApprove, onReject }) {
           <p className="font-semibold text-slate-900">{row.fullName}</p>
           <p className="text-sm text-slate-500">{row.contactEmail}</p>
           <p className="mt-1 text-xs text-slate-500">
-            Applied for {row.gradeLevelName} {row.sectionName} ·{' '}
+            Applied as {row.requestedRole} {row.requestedRole === 'Student' ? `for ${row.gradeLevelName} ${row.sectionName}` : ''} ·{' '}
             {new Date(row.submittedAt).toLocaleDateString()}
             {row.studentIdNumber ? (
               <>
@@ -291,6 +375,8 @@ export default function AdminAccounts() {
   const [teacherPage, setTeacherPage] = useState(1);
   const [teachersLoading, setTeachersLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [showCreateStaff, setShowCreateStaff] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -306,6 +392,11 @@ export default function AdminAccounts() {
       setRegistrations(rows);
       setPendingCount(reviewTab === 'Pending' ? rows.length : pending.length);
     } catch (err) {
+      console.error('Failed to load registration approval queue', {
+        status: err.response?.status,
+        response: err.response?.data,
+        message: err.message,
+      });
       setQueueError(err.friendlyMessage ?? extractErrorMessage(err));
     } finally {
       setLoading(false);
@@ -333,6 +424,18 @@ export default function AdminAccounts() {
       setTeachersLoading(false);
     }
   }, [teacherPage, teacherSearch]);
+
+  async function downloadTeachersPdf() {
+    setDownloadingPdf(true);
+    setError(null);
+    try {
+      await reportPdfApi.teachersRoster();
+    } catch (err) {
+      setError(err.friendlyMessage ?? err.message ?? 'The faculty directory PDF could not be downloaded.');
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
 
   useEffect(() => {
     loadTeachers();
@@ -497,11 +600,20 @@ export default function AdminAccounts() {
           <div>
             <h2 className="font-semibold text-slate-900">Staff accounts</h2>
             <p className="text-sm text-slate-500">
-              Provision teachers, reset a password, or switch an account off.
+              Provision teachers and non-teaching staff. New staff receive the Staff role and a Smart ID.
             </p>
           </div>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={downloadTeachersPdf}
+              disabled={downloadingPdf}
+            >
+              {downloadingPdf ? <Spinner className="size-4" /> : <Download className="size-4" aria-hidden="true" />}
+              {downloadingPdf ? 'Downloading PDF…' : 'Export Faculty List PDF'}
+            </button>
             <SearchBox
               value={teacherSearch}
               onSearch={(value) => {
@@ -518,8 +630,29 @@ export default function AdminAccounts() {
               <UserPlus className="size-4" aria-hidden="true" />
               New teacher
             </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setShowCreateStaff((value) => !value)}
+              aria-expanded={showCreateStaff}
+            >
+              <UserPlus className="size-4" aria-hidden="true" />
+              New staff
+            </button>
           </div>
         </div>
+
+        {showCreateStaff && (
+          <NewStaffForm
+            onError={setError}
+            onCreated={(result) => {
+              setNotice(
+                `${result.fullName} added as staff with Smart ID ${result.cardUID}. `
+                + `Sign-in: ${result.email}. Temporary password: ${result.temporaryPassword}`,
+              );
+            }}
+          />
+        )}
 
         {showCreate && (
           <NewTeacherForm

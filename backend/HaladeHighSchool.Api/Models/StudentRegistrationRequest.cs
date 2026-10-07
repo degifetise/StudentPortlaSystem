@@ -35,9 +35,13 @@ public class StudentRegistrationRequest
     /// </summary>
     public string ContactEmail { get; set; } = string.Empty;
 
-    public int GradeLevelId { get; set; }
+    public string? PhotoUrl { get; set; }
 
-    public int SectionId { get; set; }
+    public int? GradeLevelId { get; set; }
+
+    public int? SectionId { get; set; }
+
+    public string RequestedRole { get; set; } = "Student";
 
     /// <summary>One of <see cref="RegistrationRequestStatus"/>.</summary>
     public string Status { get; set; } = RegistrationRequestStatus.Pending;

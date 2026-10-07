@@ -17,10 +17,14 @@ namespace HaladeHighSchool.Api.Controllers;
 public class RegistrationRequestsController : ControllerBase
 {
     private readonly IRegistrationRequestService _registrations;
+    private readonly ILogger<RegistrationRequestsController> _logger;
 
-    public RegistrationRequestsController(IRegistrationRequestService registrations)
+    public RegistrationRequestsController(
+        IRegistrationRequestService registrations,
+        ILogger<RegistrationRequestsController> logger)
     {
         _registrations = registrations;
+        _logger = logger;
     }
 
     /// <summary>
@@ -52,7 +56,19 @@ public class RegistrationRequestsController : ControllerBase
             });
         }
 
-        return Ok(await _registrations.ListAsync(requested, cancellationToken));
+        try
+        {
+            return Ok(await _registrations.ListAsync(requested, cancellationToken));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching registration requests with status {Status}", requested);
+            return StatusCode(StatusCodes.Status500InternalServerError, new
+            {
+                message = "Failed to load approval queue",
+                error = ex.Message,
+            });
+        }
     }
 
     /// <summary>
@@ -79,6 +95,33 @@ public class RegistrationRequestsController : ControllerBase
         }
 
         var result = await _registrations.ApproveAsync(id, request?.Note, reviewerId, cancellationToken);
+
+        return result.Succeeded && result.Value is not null
+            ? Ok(result.Value)
+            : Problem(result);
+    }
+
+    /// <summary>
+    /// Approves a student application through the dedicated student-approval route.
+    /// </summary>
+    [HttpPost("~/api/admin/approve-student/{id:int}")]
+    [ProducesResponseType<ApprovedRegistrationResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<ApprovedRegistrationResponse>> ApproveStudent(
+        int id,
+        ReviewRegistrationRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var reviewerId = User.GetUserId();
+        if (reviewerId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await _registrations.ApproveAsync(
+            id, request?.Note, reviewerId, cancellationToken, studentOnly: true);
 
         return result.Succeeded && result.Value is not null
             ? Ok(result.Value)

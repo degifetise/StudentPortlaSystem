@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace HaladeHighSchool.Api.DTOs;
 
@@ -50,6 +51,9 @@ public record CreateTeacherRequest
     public string? PhoneNumber { get; init; }
 
     public DateOnly? HireDate { get; init; }
+
+    [JsonIgnore]
+    public IFormFile? Photo { get; init; }
 }
 
 public record CreateTeacherResponse
@@ -90,6 +94,13 @@ public record CreateTeachingAssignmentRequest
     public int SectionId { get; init; }
 }
 
+/// <summary>Moves an existing teaching assignment to another active teacher.</summary>
+public record ReassignTeachingAssignmentRequest
+{
+    [Range(1, int.MaxValue)]
+    public int TeacherId { get; init; }
+}
+
 /// <summary>
 /// One student on a teacher's class list, with their standing in that teacher's subject.
 /// Scores come from vw_StudentSubjectPerformance, so they are the same weighted figures the
@@ -106,8 +117,8 @@ public record ClassRosterEntry
 
     /// <summary>Null until at least one mark in this subject has been published.</summary>
     public decimal? TotalScore { get; init; }
-    public string? LetterGrade { get; init; }
-    public bool? IsPass { get; init; }
+    public string? Status { get; init; }
+    public bool? IsPassed { get; init; }
 
     /// <summary>How many of the five weighted components carry a published mark.</summary>
     public int ComponentsMarked { get; init; }

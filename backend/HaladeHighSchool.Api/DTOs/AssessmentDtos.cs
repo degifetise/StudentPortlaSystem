@@ -8,6 +8,7 @@ public record AssessmentResponse
     public int Id { get; init; }
     public string Title { get; init; } = string.Empty;
     public AssessmentType AssessmentType { get; init; }
+    public string? CustomTypeTitle { get; init; }
     public decimal WeightPercentage { get; init; }
     public decimal MaxScore { get; init; }
     public int SubjectId { get; init; }
@@ -35,6 +36,9 @@ public record CreateAssessmentRequest
     [Required]
     public AssessmentType AssessmentType { get; init; }
 
+    [MaxLength(100)]
+    public string? CustomTypeTitle { get; init; }
+
     [Required, Range(0.01, 1000)]
     public decimal MaxScore { get; init; }
 
@@ -51,6 +55,11 @@ public record UpdateAssessmentRequest
 {
     [Required, MaxLength(200)]
     public string Title { get; init; } = string.Empty;
+
+    public AssessmentType? AssessmentType { get; init; }
+
+    [MaxLength(100)]
+    public string? CustomTypeTitle { get; init; }
 
     [Required, Range(0.01, 1000)]
     public decimal MaxScore { get; init; }

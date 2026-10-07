@@ -1,10 +1,10 @@
 /* ============================================================================
-   HALADE HIGH SCHOOL PORTAL
+   SCHOOL MANAGEMENT SYSTEM
    Phase 1 - Database Schema (Microsoft SQL Server 2022 / SSMS compatible)
 
    Target database : HaladeHighSchoolDb
    Auth model      : ASP.NET Core Identity (EF Core) + JWT (refresh tokens)
-   Scope           : Grades 9-12, Sections A-C
+   Scope           : Nursery through Grade 12, Sections A-F
 
    Execution       : Open in SSMS, ensure SQLCMD mode is OFF, press F5.
                      The script is idempotent - it can be re-run safely.
@@ -240,9 +240,22 @@ BEGIN
         CONSTRAINT PK_GradeLevels PRIMARY KEY CLUSTERED (Id),
         CONSTRAINT UQ_GradeLevels_Name  UNIQUE NONCLUSTERED ([Name]),
         CONSTRAINT UQ_GradeLevels_Level UNIQUE NONCLUSTERED ([Level]),
-        CONSTRAINT CK_GradeLevels_Level CHECK ([Level] BETWEEN 9 AND 12)
+        CONSTRAINT CK_GradeLevels_Level CHECK ([Level] BETWEEN -3 AND 12)
     );
 END
+GO
+
+IF EXISTS (
+    SELECT 1
+    FROM sys.check_constraints
+    WHERE parent_object_id = OBJECT_ID(N'dbo.GradeLevels')
+      AND name = N'CK_GradeLevels_Level'
+)
+BEGIN
+    ALTER TABLE dbo.GradeLevels DROP CONSTRAINT CK_GradeLevels_Level;
+END
+ALTER TABLE dbo.GradeLevels
+    ADD CONSTRAINT CK_GradeLevels_Level CHECK ([Level] BETWEEN -3 AND 12);
 GO
 
 IF OBJECT_ID(N'dbo.Sections', N'U') IS NULL
@@ -403,8 +416,9 @@ BEGIN
         /* Where the applicant can be reached, and where the issued credentials are sent. This
            is not the sign-in address: that is generated at approval. */
         ContactEmail     nvarchar(256) NOT NULL,
-        GradeLevelId     int           NOT NULL,
-        SectionId        int           NOT NULL,
+        RequestedRole    nvarchar(20)  NULL CONSTRAINT DF_StudentRegistrationRequests_RequestedRole DEFAULT (N'Student'),
+        GradeLevelId     int           NULL,
+        SectionId        int           NULL,
         [Status]         nvarchar(20)  NOT NULL CONSTRAINT DF_StudentRegistrationRequests_Status DEFAULT (N'Pending'),
         SubmittedAt      datetime2(7)  NOT NULL CONSTRAINT DF_StudentRegistrationRequests_SubmittedAt DEFAULT (SYSUTCDATETIME()),
         ReviewedAt       datetime2(7)  NULL,
@@ -419,6 +433,8 @@ BEGIN
         CONSTRAINT PK_StudentRegistrationRequests PRIMARY KEY CLUSTERED (Id),
         CONSTRAINT CK_StudentRegistrationRequests_Status
             CHECK ([Status] IN (N'Pending', N'Approved', N'Rejected')),
+        CONSTRAINT CK_StudentRegistrationRequests_RequestedRole
+            CHECK (RequestedRole IS NULL OR RequestedRole IN (N'Student', N'Teacher')),
         CONSTRAINT FK_StudentRegistrationRequests_GradeLevels_GradeLevelId FOREIGN KEY (GradeLevelId)
             REFERENCES dbo.GradeLevels (Id) ON DELETE NO ACTION,
         CONSTRAINT FK_StudentRegistrationRequests_Sections_SectionId FOREIGN KEY (SectionId)
@@ -542,8 +558,8 @@ GO
 
 /* ----------------------------------------------------------------------------
    6. ASSESSMENT & MARKS
-      Weighting (sums to 100% of the final subject score):
-        Quiz 10 | Assignment 10 | Test 20 | MidExam 30 | FinalExam 30
+            Strict score components (sums to 100 points):
+                Quiz 10 | Test 10 | MidExam 30 | FinalExam 50
    ---------------------------------------------------------------------------- */
 IF OBJECT_ID(N'dbo.AssessmentTypes', N'U') IS NULL
 BEGIN
@@ -794,18 +810,12 @@ SELECT
     w.StudentId,
     w.SubjectId,
     SUM(CASE WHEN w.AssessmentType = N'Quiz'       THEN w.WeightedScore END) AS QuizScore,
-    SUM(CASE WHEN w.AssessmentType = N'Assignment' THEN w.WeightedScore END) AS AssignmentScore,
     SUM(CASE WHEN w.AssessmentType = N'Test'       THEN w.WeightedScore END) AS TestScore,
     SUM(CASE WHEN w.AssessmentType = N'MidExam'    THEN w.WeightedScore END) AS MidExamScore,
     SUM(CASE WHEN w.AssessmentType = N'FinalExam'  THEN w.WeightedScore END) AS FinalExamScore,
     CAST(SUM(w.WeightedScore) AS decimal(6,2)) AS TotalScore,
-    CASE
-        WHEN SUM(w.WeightedScore) >= 90 THEN N'A'
-        WHEN SUM(w.WeightedScore) >= 80 THEN N'B'
-        WHEN SUM(w.WeightedScore) >= 70 THEN N'C'
-        WHEN SUM(w.WeightedScore) >= 60 THEN N'D'
-        ELSE N'F'
-    END AS LetterGrade
+    CAST(CASE WHEN SUM(w.WeightedScore) >= 50 THEN 1 ELSE 0 END AS bit) AS IsPassed,
+    CASE WHEN SUM(w.WeightedScore) >= 50 THEN N'Pass' ELSE N'Fail' END AS [Status]
 FROM Weighted AS w
 GROUP BY w.StudentId, w.SubjectId;
 GO
@@ -817,7 +827,7 @@ GO
 /* 9.1 Roles ---------------------------------------------------------------- */
 MERGE dbo.AspNetRoles AS tgt
 USING (VALUES
-    (N'Admin'), (N'Teacher'), (N'Student')
+    (N'Admin'), (N'Teacher'), (N'Student'), (N'Parent')
 ) AS src ([Name])
     ON tgt.NormalizedName = UPPER(src.[Name])
 WHEN NOT MATCHED BY TARGET THEN
@@ -835,34 +845,47 @@ GO
 MERGE dbo.AssessmentTypes AS tgt
 USING (VALUES
     (N'Quiz',       N'Quiz',        CAST(10.00 AS decimal(5,2)), 1),
-    (N'Assignment', N'Assignment',  CAST(10.00 AS decimal(5,2)), 2),
-    (N'Test',       N'Test',        CAST(20.00 AS decimal(5,2)), 3),
-    (N'MidExam',    N'Mid Exam',    CAST(30.00 AS decimal(5,2)), 4),
-    (N'FinalExam',  N'Final Exam',  CAST(30.00 AS decimal(5,2)), 5)
+    (N'Assignment', N'Assignment',  CAST(0.01 AS decimal(5,2)), 99),
+    (N'Test',       N'Test',        CAST(10.00 AS decimal(5,2)), 2),
+    (N'MidExam',    N'Mid Exam',    CAST(30.00 AS decimal(5,2)), 3),
+    (N'FinalExam',  N'Final Exam',  CAST(50.00 AS decimal(5,2)), 4)
 ) AS src ([Name], DisplayName, WeightPercentage, DisplayOrder)
     ON tgt.[Name] = src.[Name]
 WHEN MATCHED THEN
     UPDATE SET DisplayName      = src.DisplayName,
                WeightPercentage = src.WeightPercentage,
-               DisplayOrder     = src.DisplayOrder
+               DisplayOrder     = src.DisplayOrder,
+               IsActive         = CASE WHEN src.[Name] = N'Assignment' THEN 0 ELSE 1 END
 WHEN NOT MATCHED BY TARGET THEN
     INSERT ([Name], DisplayName, WeightPercentage, DisplayOrder)
     VALUES (src.[Name], src.DisplayName, src.WeightPercentage, src.DisplayOrder);
 GO
 
 /* 9.3 Grade levels ---------------------------------------------------------
-   Insert-only baseline, keyed on [Level] because 9-12 is fixed by
-   CK_GradeLevels_Level and is the one value no API can change. Name, description
+   Insert-only baseline, keyed on [Level] because the supported level range is
+   fixed by CK_GradeLevels_Level. Name, description
    and IsActive are editable through /api/grade-levels, so they are seeded once
    and never reasserted.
    -------------------------------------------------------------------------- */
 INSERT INTO dbo.GradeLevels ([Name], [Level], [Description])
 SELECT src.[Name], src.[Level], src.[Description]
 FROM (VALUES
-    (N'Grade 9',  9,  N'Freshman year'),
-    (N'Grade 10', 10, N'Sophomore year'),
-    (N'Grade 11', 11, N'Junior year'),
-    (N'Grade 12', 12, N'Senior year')
+    (N'Nursery', -3, N'Early childhood'),
+    (N'KG',      -2, N'Kindergarten'),
+    (N'LKG',     -1, N'Lower kindergarten'),
+    (N'UKG',      0, N'Upper kindergarten'),
+    (N'Grade 1',  1, N'Primary school'),
+    (N'Grade 2',  2, N'Primary school'),
+    (N'Grade 3',  3, N'Primary school'),
+    (N'Grade 4',  4, N'Primary school'),
+    (N'Grade 5',  5, N'Primary school'),
+    (N'Grade 6',  6, N'Middle school'),
+    (N'Grade 7',  7, N'Middle school'),
+    (N'Grade 8',  8, N'Middle school'),
+    (N'Grade 9',  9, N'High school'),
+    (N'Grade 10', 10, N'High school'),
+    (N'Grade 11', 11, N'Preparatory school'),
+    (N'Grade 12', 12, N'Preparatory school')
 ) AS src ([Name], [Level], [Description])
 WHERE NOT EXISTS (
     SELECT 1 FROM dbo.GradeLevels AS g WHERE g.[Level] = src.[Level]
@@ -882,7 +905,10 @@ BEGIN
     INSERT INTO dbo.Sections ([Name], Code, Capacity)
     VALUES (N'Section A', N'A', 40),
            (N'Section B', N'B', 40),
-           (N'Section C', N'C', 40);
+           (N'Section C', N'C', 40),
+           (N'Section D', N'D', 40),
+           (N'Section E', N'E', 40),
+           (N'Section F', N'F', 40);
 END
 GO
 
@@ -916,12 +942,12 @@ GO
 /* 9.6 System settings ------------------------------------------------------ */
 MERGE dbo.SystemSettings AS tgt
 USING (VALUES
-    (N'SchoolName',           N'Halade High School',      N'Displayed in the portal header and reports'),
+    (N'SchoolName',           N'School Management System', N'Displayed in the portal header and reports'),
     (N'AcademicYear',         N'2026-2027',               N'Active academic year'),
     (N'PassMarkPercentage',   N'50',                      N'Minimum weighted total to pass a subject'),
     (N'AllowSelfRegistration',N'false',                   N'When false only Admins can create accounts'),
     (N'MaxUploadSizeMb',      N'25',                      N'Maximum lesson/resource upload size in MB'),
-    (N'ContactEmail',         N'info@haladehighschool.edu',N'Public contact address')
+    (N'ContactEmail',         N'info@sms.edu',             N'Public contact address')
 ) AS src ([Key], [Value], [Description])
     ON tgt.[Key] = src.[Key]
 WHEN NOT MATCHED BY TARGET THEN
@@ -932,7 +958,7 @@ GO
 IF NOT EXISTS (SELECT 1 FROM dbo.Announcements)
 BEGIN
     INSERT INTO dbo.Announcements (Title, Content, TargetRole, IsPublished, IsPinned)
-    VALUES (N'Welcome to the Halade High School Portal',
+    VALUES (N'Welcome to the School Management System',
             N'The new academic year is open. Students can view subjects, lesson materials and report cards here. Teachers can manage marks and upload resources.',
             N'All', 1, 1);
 END

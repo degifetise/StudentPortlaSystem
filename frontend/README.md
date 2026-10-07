@@ -5,7 +5,9 @@ Lucide React supplies the icons and Framer Motion the transitions.
 
 ## Prerequisites
 
-1. `HaladeHighSchoolDb` created by `database/01_Create_HaladeHighSchoolDb.sql`.
+1. `HaladeHighSchoolDb` created by `database/01_Create_HaladeHighSchoolDb.sql`, then upgraded
+   through the applicable numbered scripts, including `database/16_Smart_ID_System.sql` and
+   `database/17_Registration_Profile_Photos.sql`.
 2. The API running on <http://localhost:5006> (`dotnet run` in `backend/HaladeHighSchool.Api`).
    Its CORS policy whitelists `http://localhost:5173`, so the Vite port is pinned in
    `vite.config.js`; change both together if you move it.
@@ -29,7 +31,8 @@ npm run build                # production bundle in dist/
 | `src/context/SchoolInfoContext.jsx` | Anonymous school name / academic year for the header and login screen |
 | `src/routes/AppRoutes.jsx` | Route table; `ProtectedRoute` enforces the role on each branch |
 | `src/hooks/useApiResource.js` | Shared loading / error / retry state for a fetch, used by every read-only page |
-| `src/components/layout/TopNavBar.jsx` | The one navigation bar: brand, role links, profile badges, sign out, mobile drawer |
+| `src/components/layout/TopNavBar.jsx` | Public and non-admin navigation, profile badges, notifications and mobile drawer |
+| `src/components/layout/SideDashboard.jsx` | Responsive, collapsible administrator dashboard navigation |
 | `src/components/layout/PublicLayout.jsx` | Shell for the pages anyone can read |
 | `src/components/layout/DashboardLayout.jsx` | Shell for the signed-in areas, adds the page heading strip |
 | `src/pages/HomePage.jsx` | Public landing page: live figures, grading policy, latest notices |
@@ -50,6 +53,20 @@ npm run build                # production bundle in dist/
 | `/admin`, `/admin/settings` | Admin | grade levels, sections, student summary, teachers, system settings |
 | `/teacher/marks` | Teacher | `GET /api/teachers/me/classes`, assessments, gradebook |
 | `/student/results` | Student | `GET /api/marks/me/report-card`, `GET /api/marks/weights` |
+| `/my-smart-id` | Admin, teacher, student | `GET /api/smart-id/card-details/{userId}`, short-lived QR token |
+| `/admin/smart-id/print` | Admin | `POST /api/smart-id/batch-cards` filtered by grade/section or teacher department, photo upload and card status |
+| `/admin/scanner`, `/staff/scanner` | Admin, teacher | `POST /api/smart-id/verify-scan` |
+
+The Smart ID migration adds the card, profile photo, and scan audit schema. Apply it before
+starting the API; on startup, missing cards are issued for existing students, teachers, and
+administrators. New cards are issued transactionally with approved registrations and direct
+admin provisioning. Optional JPG/PNG photos (maximum 2 MB) can be attached to public student or
+teacher applications and administrator-created student/teacher accounts. Applicant photos are
+kept with the pending request and linked to `AspNetUsers.PhotoUrl` when the account is approved;
+files live under `wwwroot/uploads/photos`. Card QR signing keys are encrypted with a key derived from `Jwt:Key`, so
+keep that application secret stable (or reissue cards after rotating it). Use HTTPS for camera
+scanning outside localhost. Batch output prints front sheets followed by back sheets; configure
+the printer for CR80 sizing and duplex handling as required by the printer.
 
 Nothing is hard-coded from the school's data: the name, academic year, contact address, grade
 list, subject counts and grading weights are all read from the API, so changing them in

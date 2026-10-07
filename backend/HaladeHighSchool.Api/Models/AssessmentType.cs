@@ -1,9 +1,8 @@
 namespace HaladeHighSchool.Api.Models;
 
 /// <summary>
-/// The five assessment categories. Persisted as text so the values match the
-/// AssessmentTypes lookup table that the Assessments foreign key points at.
-/// Weights total 100%: Quiz 10, Assignment 10, Test 20, MidExam 30, FinalExam 30.
+/// Assessment categories persisted as text. Assignment remains for legacy rows but is
+/// inactive; new grading uses strict Quiz/Test/MidExam/FinalExam components.
 /// </summary>
 public enum AssessmentType
 {
@@ -11,7 +10,8 @@ public enum AssessmentType
     Assignment,
     Test,
     MidExam,
-    FinalExam
+    FinalExam,
+    Other
 }
 
 /// <summary>

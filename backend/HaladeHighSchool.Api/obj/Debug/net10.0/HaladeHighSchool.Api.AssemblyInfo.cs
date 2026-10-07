@@ -10,10 +10,11 @@
 using System;
 using System.Reflection;
 
+[assembly: Microsoft.Extensions.Configuration.UserSecrets.UserSecretsIdAttribute("87553e2e-3c22-450b-ac91-3f042f0b668c")]
 [assembly: System.Reflection.AssemblyCompanyAttribute("HaladeHighSchool.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+dc0d6c2f8162f2928da942b1df8b24d3ec3e6b4a")]
 [assembly: System.Reflection.AssemblyProductAttribute("HaladeHighSchool.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("HaladeHighSchool.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

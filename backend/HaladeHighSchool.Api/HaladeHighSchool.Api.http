@@ -1,17 +1,55 @@
 @HaladeHighSchool.Api_HostAddress = http://localhost:5006
 
 ### Sign in as the seeded administrator
+# Set adminEmail and adminPassword in your local REST Client environment.
 # @name login
 POST {{HaladeHighSchool.Api_HostAddress}}/api/auth/login
 Content-Type: application/json
 
 {
-  "email": "admin@haladehighschool.edu",
-  "password": "Admin@12345"
+  "email": "{{adminEmail}}",
+  "password": "{{adminPassword}}"
 }
 
 ### Capture the token from the login response
 @token = {{login.response.body.accessToken}}
+
+### Admin: look up a user by Student ID, Employee ID, or staff email
+GET {{HaladeHighSchool.Api_HostAddress}}/api/smart-id/admin/users/replace-with-student-or-employee-id
+Authorization: Bearer {{token}}
+
+### Admin: list issued and pending Smart IDs
+GET {{HaladeHighSchool.Api_HostAddress}}/api/smart-id/admin/cards?search=&role=student
+Authorization: Bearer {{token}}
+
+### Admin: issue one user's Smart ID (use the UserId returned by lookup)
+POST {{HaladeHighSchool.Api_HostAddress}}/api/smart-id/admin/users/replace-with-user-id/generate
+Authorization: Bearer {{token}}
+
+### Admin: update an issued Smart ID and rotate its QR signing secret
+PUT {{HaladeHighSchool.Api_HostAddress}}/api/smart-id/admin/cards/replace-with-user-id
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "fullName": "Updated cardholder name",
+  "status": "ACTIVE",
+  "rotateQrToken": true
+}
+
+### Admin: revoke a Smart ID (only use a disposable test card)
+DELETE {{HaladeHighSchool.Api_HostAddress}}/api/smart-id/admin/cards/replace-with-user-id
+Authorization: Bearer {{token}}
+
+### Admin: generate cards for selected student accounts
+# Replace the placeholder with one or more existing student UserIds. Requests are limited to 100.
+POST {{HaladeHighSchool.Api_HostAddress}}/api/smart-id/generate-cards?role=student
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "userIds": ["replace-with-student-user-id"]
+}
 
 ### Current profile
 GET {{HaladeHighSchool.Api_HostAddress}}/api/auth/me
@@ -25,13 +63,21 @@ Authorization: Bearer {{token}}
 GET {{HaladeHighSchool.Api_HostAddress}}/api/students/summary
 Authorization: Bearer {{token}}
 
-### Enrol a student (GradeLevelId 2 = Grade 10, SectionId 1 = Section A)
+### Approve a pending student registration (replace 1 with a pending request ID)
+POST {{HaladeHighSchool.Api_HostAddress}}/api/admin/approve-student/1
+Authorization: {{token}}
+Content-Type: application/json
+
+{
+  "note": "Documents verified"
+}
+
+### Enrol a student (use an active grade and section ID)
 POST {{HaladeHighSchool.Api_HostAddress}}/api/students
 Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
-  "email": "lensa.tolera@halade.edu",
   "fullName": "Lensa Tolera",
   "gradeLevelId": 2,
   "sectionId": 1,
@@ -99,3 +145,32 @@ Content-Type: application/json
 {
   "refreshToken": "{{login.response.body.refreshToken}}"
 }
+
+### School-wide analytics (Admin token)
+GET {{HaladeHighSchool.Api_HostAddress}}/api/admin/analytics/overview
+Authorization: Bearer {{token}}
+
+# Set teacherToken to an access token from /api/auth/login for an account with the Teacher role.
+### Assigned-class performance analytics (Teacher token)
+GET {{HaladeHighSchool.Api_HostAddress}}/api/teacher/analytics/performance
+Authorization: Bearer {{teacherToken}}
+
+### Download personal academic results (Student token)
+GET {{HaladeHighSchool.Api_HostAddress}}/api/assessments/my-results/pdf
+Authorization: Bearer {{studentToken}}
+
+### Download the full student roster (Admin token)
+GET {{HaladeHighSchool.Api_HostAddress}}/api/admin/reports/students/pdf
+Authorization: Bearer {{token}}
+
+### Download a Grade 10, Section A roster (Admin token)
+GET {{HaladeHighSchool.Api_HostAddress}}/api/admin/reports/students/pdf?gradeLevelId=2&sectionId=1
+Authorization: Bearer {{token}}
+
+### Download the faculty directory (Admin token)
+GET {{HaladeHighSchool.Api_HostAddress}}/api/admin/reports/teachers/pdf
+Authorization: Bearer {{token}}
+
+### Download an assigned section roster (Teacher token)
+GET {{HaladeHighSchool.Api_HostAddress}}/api/teacher/reports/section/1/pdf
+Authorization: Bearer {{teacherToken}}

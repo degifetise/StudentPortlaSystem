@@ -1,0 +1,117 @@
+@baseUrl = http://localhost:5006
+@token = replace-with-a-valid-access-token
+@notificationId = 1
+@eventId = 1
+@feedbackId = 1
+@teacherId = 1
+@gradeLevelId = 1
+@sectionId = 1
+
+### List authenticated user's recent notifications
+GET {{baseUrl}}/api/notifications
+Authorization: Bearer {{token}}
+
+### Get authenticated user's unread notification count
+GET {{baseUrl}}/api/notifications/unread-count
+Authorization: Bearer {{token}}
+
+### Mark one owned notification as read
+PUT {{baseUrl}}/api/notifications/{{notificationId}}/read
+Authorization: Bearer {{token}}
+
+### Missing or unowned notification returns 404
+PUT {{baseUrl}}/api/notifications/9223372036854770000/read
+Authorization: Bearer {{token}}
+
+### Mark all authenticated user's notifications as read
+PUT {{baseUrl}}/api/notifications/read-all
+Authorization: Bearer {{token}}
+
+### Submit feedback as a student
+POST {{baseUrl}}/api/feedback
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "category": "Subject",
+  "message": "Please share more worked examples before the next assessment."
+}
+
+### List my feedback as a student
+GET {{baseUrl}}/api/feedback
+Authorization: Bearer {{token}}
+
+### Compatibility route: list my feedback
+GET {{baseUrl}}/api/feedback/my-feedback
+Authorization: Bearer {{token}}
+
+### List feedback for administrator review
+GET {{baseUrl}}/api/admin/feedback
+Authorization: Bearer {{token}}
+
+### Change feedback review status
+PUT {{baseUrl}}/api/admin/feedback/{{feedbackId}}/status
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "status": "Acknowledged"
+}
+
+### Missing feedback returns 404
+PUT {{baseUrl}}/api/admin/feedback/9223372036854770000/status
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "status": "Resolved"
+}
+
+### List comments on a visible event as a student
+GET {{baseUrl}}/api/events/{{eventId}}/comments
+Authorization: Bearer {{token}}
+
+### Missing or non-visible event returns 404
+GET {{baseUrl}}/api/events/2147483647/comments
+Authorization: Bearer {{token}}
+
+### Post a comment on a visible event as a student
+POST {{baseUrl}}/api/events/{{eventId}}/comments
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "commentText": "Will students need to bring any materials?"
+}
+
+### Reply as an administrator to an existing top-level comment
+POST {{baseUrl}}/api/events/{{eventId}}/comments/reply
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "parentCommentId": 1,
+  "commentText": "Please bring your student ID and a notebook."
+}
+
+### Assign selected subjects to selected sections as an administrator
+POST {{baseUrl}}/api/allocations/assign-bulk
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "teacherId": {{teacherId}},
+  "subjectIds": [1, 2],
+  "sectionIds": [{{sectionId}}]
+}
+
+### Enroll several students by their student ID numbers
+POST {{baseUrl}}/api/students/bulk-enroll
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "studentIdNumbers": ["STU-2026-001", "STU-2026-002"],
+  "gradeLevelId": {{gradeLevelId}},
+  "sectionId": {{sectionId}}
+}

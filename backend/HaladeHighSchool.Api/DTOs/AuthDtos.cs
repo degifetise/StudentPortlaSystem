@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace HaladeHighSchool.Api.DTOs;
 
@@ -39,6 +40,10 @@ public record UserProfileResponse
     public int? TeacherId { get; init; }
     public string? EmployeeId { get; init; }
     public string? Specialization { get; init; }
+
+    /// <summary>Populated when the user is a guardian.</summary>
+    public int? GuardianId { get; init; }
+    public IReadOnlyList<int> LinkedStudentIds { get; init; } = [];
 }
 
 /// <summary>
@@ -48,6 +53,10 @@ public record UserProfileResponse
 /// </summary>
 public record RegisterStudentRequest
 {
+    [Required]
+    [RegularExpression("^(Student|Teacher)$", ErrorMessage = "RequestedRole must be Student or Teacher.")]
+    public string RequestedRole { get; init; } = "Student";
+
     [Required(ErrorMessage = "Tell us your full name.")]
     [MaxLength(150)]
     public string FullName { get; init; } = string.Empty;
@@ -58,13 +67,14 @@ public record RegisterStudentRequest
     [MaxLength(256)]
     public string Email { get; init; } = string.Empty;
 
-    [Required]
     [Range(1, int.MaxValue, ErrorMessage = "Choose a grade.")]
-    public int GradeLevelId { get; init; }
+    public int? GradeLevelId { get; init; }
 
-    [Required]
     [Range(1, int.MaxValue, ErrorMessage = "Choose a section.")]
-    public int SectionId { get; init; }
+    public int? SectionId { get; init; }
+
+    [JsonIgnore]
+    public IFormFile? Photo { get; init; }
 }
 
 /// <summary>
@@ -75,6 +85,7 @@ public record RegistrationSubmittedResponse
 {
     public int RequestId { get; init; }
     public string Status { get; init; } = string.Empty;
+    public string RequestedRole { get; init; } = "Student";
     public string FullName { get; init; } = string.Empty;
     public string ContactEmail { get; init; } = string.Empty;
     public string GradeLevelName { get; init; } = string.Empty;

@@ -12,6 +12,7 @@ import {
 import { assessmentApi, markApi, teacherApi } from '../../services/endpoints';
 import { extractErrorMessage } from '../../services/api';
 import { Alert, Badge, EmptyState, ErrorState, LoadingPanel, Spinner } from '../../components/ui/Feedback';
+import AssessmentForm from '../../components/assessments/AssessmentForm';
 
 /** The DisplayName column of the AssessmentTypes lookup table, so both roles see one wording. */
 const TYPE_LABELS = {
@@ -32,6 +33,7 @@ export default function EnterMarks() {
   const [assignmentId, setAssignmentId] = useState('');
   const [assessments, setAssessments] = useState([]);
   const [assessmentId, setAssessmentId] = useState('');
+  const [showCreateAssessment, setShowCreateAssessment] = useState(false);
   const [gradebook, setGradebook] = useState(null);
 
   const [drafts, setDrafts] = useState({});
@@ -302,13 +304,43 @@ export default function EnterMarks() {
             </option>
             {assessments.map((item) => (
               <option key={item.id} value={item.id}>
-                {item.title} — {TYPE_LABELS[item.assessmentType] ?? item.assessmentType} (
+                {item.title} — {item.customTypeTitle ?? TYPE_LABELS[item.assessmentType] ?? item.assessmentType} (
                 {item.weightPercentage}%, out of {item.maxScore})
               </option>
             ))}
           </select>
         </div>
       </section>
+
+      {assignment && (
+        <section className="card overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+            <div>
+              <h2 className="font-semibold text-slate-900">Create an assessment</h2>
+              <p className="text-sm text-slate-500">Set its type and maximum marks before entering grades.</p>
+            </div>
+            {!showCreateAssessment && (
+              <button type="button" className="btn-secondary" onClick={() => setShowCreateAssessment(true)}>
+                Create assessment
+              </button>
+            )}
+          </div>
+          {showCreateAssessment && (
+            <AssessmentForm
+              subjects={[{ id: assignment.subjectId, code: assignment.subjectCode, subjectName: assignment.subjectName }]}
+              sections={[]}
+              defaultSubjectId={assignment.subjectId}
+              defaultSectionId={assignment.sectionId}
+              onSubmit={async (payload) => {
+                const created = await assessmentApi.create(payload);
+                setAssessments((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+                setAssessmentId(String(created.id));
+                setShowCreateAssessment(false);
+              }}
+            />
+          )}
+        </section>
+      )}
 
       {loadingGradebook && <LoadingPanel label="Loading the class list…" />}
 
@@ -329,7 +361,7 @@ export default function EnterMarks() {
 
             <div className="ml-auto flex flex-wrap items-center gap-2">
               <Badge tone="brand">
-                {TYPE_LABELS[gradebook.assessmentType] ?? gradebook.assessmentType}
+                {gradebook.customTypeTitle ?? TYPE_LABELS[gradebook.assessmentType] ?? gradebook.assessmentType}
               </Badge>
               <Badge tone="slate">Weight {gradebook.weightPercentage}%</Badge>
               <Badge tone="slate">Out of {gradebook.maxScore}</Badge>

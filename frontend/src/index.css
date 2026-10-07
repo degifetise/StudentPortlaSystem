@@ -79,3 +79,166 @@ input[type="number"] {
   -moz-appearance: textfield;
   appearance: textfield;
 }
+
+.smart-id-card-face {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 85.6mm;
+  height: 53.98mm;
+  overflow: hidden;
+  border-radius: 3mm;
+  padding: 3mm;
+  color: white;
+  font-family: Arial, sans-serif;
+  background: linear-gradient(135deg, #123465, #2563a7 58%, #172554);
+  box-shadow: 0 8px 24px rgb(15 23 42 / 20%);
+}
+
+.smart-id-card-back {
+  background: linear-gradient(135deg, #173453, #0f766e);
+}
+
+.smart-id-card-face .text-white\/65 {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.smart-id-card-face .text-white\/70 {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.smart-id-card-face .text-white\/75 {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.smart-id-card-face .text-white\/80 {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.smart-id-card-face .text-slate-800 {
+  color: #1e293b;
+}
+
+.smart-id-card-face .text-slate-400 {
+  color: #94a3b8;
+}
+
+.smart-id-card-face .bg-white\/15 {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.smart-id-card-face .bg-white\/95 {
+  background-color: rgba(255, 255, 255, 0.95);
+}
+
+.smart-id-card-face .border-white\/20 {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.smart-id-card-face .border-white\/40 {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.smart-id-print-area {
+  display: none;
+}
+
+.smart-card-single-print-target {
+  display: none;
+}
+
+@page {
+  size: A4 portrait;
+  margin: 3mm;
+}
+
+@page smart-id-single {
+  size: 85.6mm 53.98mm;
+  margin: 0;
+}
+
+@media print {
+  html,
+  body {
+    width: 204mm;
+    margin: 0 !important;
+    background: white !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .smart-id-print-area,
+  .smart-id-print-area * {
+    visibility: visible !important;
+  }
+
+  .smart-id-print-area {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block !important;
+    width: 100%;
+  }
+
+  .smart-id-print-page {
+    display: grid !important;
+    width: 100%;
+    grid-template-columns: repeat(2, 85.6mm);
+    grid-auto-rows: 53.98mm;
+    justify-content: center;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .smart-id-print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .smart-id-card-face {
+    width: 85.6mm;
+    height: 53.98mm;
+    border-radius: 0;
+    box-shadow: none;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  body.smart-id-print-single .smart-id-print-area,
+  body.smart-id-print-single .smart-id-print-area * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  body.smart-id-print-single .smart-card-single-print-target,
+  body.smart-id-print-single .smart-card-single-print-target * {
+    visibility: visible !important;
+  }
+
+  body.smart-id-print-single .smart-card-single-print-target {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block !important;
+  }
+
+  body.smart-id-print-single {
+    page: smart-id-single;
+    width: 85.6mm;
+    height: auto;
+  }
+
+  body.smart-id-print-single .smart-card-single-print-target .smart-id-card-face:first-child {
+    page-break-after: always;
+    break-after: page;
+  }
+
+  body.smart-id-print-single .smart-card-single-print-target .smart-id-card-face:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+}

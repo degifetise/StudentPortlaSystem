@@ -1,0 +1,44 @@
+# Node.js / frontend build output
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Local environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/appsettings.*.local.json
+
+# .NET build output and Visual Studio files
+**/bin/
+**/obj/
+**/out/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+TestResults/
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal
+*.mdf
+*.ldf
+
+# User uploads (keep the directory placeholder)
+uploads/*
+!uploads/.gitkeep
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json

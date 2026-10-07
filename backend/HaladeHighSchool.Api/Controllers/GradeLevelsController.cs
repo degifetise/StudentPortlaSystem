@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 namespace HaladeHighSchool.Api.Controllers;
 
 /// <summary>
-/// Grades 9-12. The set of grades is fixed by a database CHECK constraint, so this
+/// Nursery through Grade 12. The set of grades is seeded in the database, so this
 /// controller exposes reads for everyone and edits (name, description, activation) to admins.
 /// </summary>
 [ApiController]

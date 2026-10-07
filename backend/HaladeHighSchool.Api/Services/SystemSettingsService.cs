@@ -16,7 +16,7 @@ public class SystemSettingsService : ISystemSettingsService
     public const string MaxUploadSizeKey = "MaxUploadSizeMb";
     public const string SelfRegistrationKey = "AllowSelfRegistration";
 
-    private const string DefaultSchoolName = "Halade High School";
+    private const string DefaultSchoolName = "School Management System";
     private const decimal DefaultPassMark = 50m;
     private const int DefaultMaxUploadMb = 25;
 

@@ -1,26 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   BadgeCheck,
+  Bell,
   ChevronDown,
+  CheckCheck,
   GraduationCap,
   IdCard,
   LogOut,
   Menu,
   School,
   ShieldCheck,
+  UsersRound,
   X,
 } from 'lucide-react';
 import { ROLES, useAuth } from '../../context/AuthContext';
 import { useSchoolInfo } from '../../context/SchoolInfoContext';
+import { notificationApi } from '../../services/endpoints';
 import { navItemsFor } from './navigation';
 
-/* Each role gets its own colour so the badge is recognisable before it is read. */
+
 const ROLE_STYLE = {
   [ROLES.admin]: { chip: 'bg-amber-400/20 text-amber-100 ring-amber-300/30', Icon: ShieldCheck },
   [ROLES.teacher]: { chip: 'bg-emerald-400/20 text-emerald-100 ring-emerald-300/30', Icon: BadgeCheck },
+  [ROLES.staff]: { chip: 'bg-indigo-400/20 text-indigo-100 ring-indigo-300/30', Icon: IdCard },
   [ROLES.student]: { chip: 'bg-sky-400/20 text-sky-100 ring-sky-300/30', Icon: GraduationCap },
+  [ROLES.guardian]: { chip: 'bg-violet-400/20 text-violet-100 ring-violet-300/30', Icon: UsersRound },
 };
 
 const FALLBACK_STYLE = { chip: 'bg-white/15 text-white ring-white/20', Icon: IdCard };
@@ -50,11 +56,7 @@ export function RoleBadge({ role, className = '' }) {
   );
 }
 
-/**
- * The identifier a role is known by: a student by their student number, a teacher by their
- * employee number. Shown next to the name so a teacher reading a screen over someone's
- * shoulder can tell whose account it is.
- */
+
 function IdentityLine({ user, roles }) {
   const identifier = user?.studentIdNumber ?? user?.employeeId;
 
@@ -72,25 +74,79 @@ function IdentityLine({ user, roles }) {
   );
 }
 
-/**
- * The portal's single navigation bar, shared by the public pages and every signed-in area.
- *
- * Structure, and why: links live on the left as a group, the account lives on the right behind
- * a separator. Logout never sits among the links — it is destructive to the session, so it is
- * visually separated from navigation both on desktop (its own control, right of the divider)
- * and on mobile (below a rule, in red, at the end of the sheet).
- */
+
 export default function TopNavBar() {
   const { user, roles, isAuthenticated, logout } = useAuth();
   const { schoolName, academicYear } = useSchoolInfo();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notifications, setNotifications] = useState([]);
+  const [notificationBusy, setNotificationBusy] = useState(false);
+  const [readingNotificationIds, setReadingNotificationIds] = useState(() => new Set());
+  const [notificationError, setNotificationError] = useState('');
   const menuRef = useRef(null);
+  const notificationRef = useRef(null);
+  const notificationCountVersion = useRef(0);
 
   const items = navItemsFor(roles);
   const isStudent = roles.includes(ROLES.student);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setUnreadCount(0);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const refreshCount = async () => {
+      const version = notificationCountVersion.current;
+      try {
+        const result = await notificationApi.unreadCount();
+        if (!cancelled && version === notificationCountVersion.current) {
+          setUnreadCount(Number.isFinite(result?.unreadCount) ? result.unreadCount : 0);
+          setNotificationError('');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setNotificationError(error.friendlyMessage ?? 'Notifications could not be refreshed.');
+        }
+      }
+    };
+
+    refreshCount();
+    const interval = setInterval(refreshCount, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isAuthenticated, location.pathname]);
+
+  useEffect(() => {
+    if (!notificationOpen) return undefined;
+
+    let cancelled = false;
+    setNotificationBusy(true);
+    notificationApi.list()
+      .then((result) => {
+        if (!cancelled) {
+          setNotifications(Array.isArray(result) ? result : result?.items ?? []);
+          setNotificationError('');
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setNotificationError(error.friendlyMessage ?? 'Notifications could not be loaded.');
+      })
+      .finally(() => {
+        if (!cancelled) setNotificationBusy(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [notificationOpen]);
 
   // Any navigation closes both overlays, including a click on the link you are already on.
   useEffect(() => {
@@ -113,6 +169,65 @@ export default function TopNavBar() {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!notificationOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (!notificationRef.current?.contains(event.target)) setNotificationOpen(false);
+    };
+    const onKeyDown = (event) => event.key === 'Escape' && setNotificationOpen(false);
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [notificationOpen]);
+
+  async function markNotificationRead(notification) {
+    if (notification.readAt) {
+      if (notification.targetUrl) navigate(notification.targetUrl);
+      setNotificationOpen(false);
+      return;
+    }
+
+    if (readingNotificationIds.has(notification.id)) return;
+    setReadingNotificationIds((current) => new Set(current).add(notification.id));
+    try {
+      await notificationApi.markRead(notification.id);
+      notificationCountVersion.current += 1;
+      setNotifications((current) => current.map((item) =>
+        item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item));
+      setUnreadCount((count) => Math.max(0, count - 1));
+      setNotificationError('');
+      if (notification.targetUrl) navigate(notification.targetUrl);
+      setNotificationOpen(false);
+    } catch (error) {
+      setNotificationError(error.friendlyMessage ?? 'This notification could not be marked as read.');
+    } finally {
+      setReadingNotificationIds((current) => {
+        const next = new Set(current);
+        next.delete(notification.id);
+        return next;
+      });
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    try {
+      await notificationApi.markAllRead();
+      notificationCountVersion.current += 1;
+      setNotifications((current) => current.map((item) => ({
+        ...item,
+        readAt: item.readAt ?? new Date().toISOString(),
+      })));
+      setUnreadCount(0);
+      setNotificationError('');
+      setNotificationOpen(false);
+    } catch (error) {
+      setNotificationError(error.friendlyMessage ?? 'Notifications could not be marked as read.');
+    }
+  }
 
   useEffect(() => {
     if (!mobileOpen) return undefined;
@@ -138,8 +253,7 @@ export default function TopNavBar() {
   return (
     <header className="sticky top-0 z-40 bg-brand-800 shadow-sm">
       <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6 lg:px-8">
-        {/* Brand. The name is read from the anonymous settings endpoint, so renaming the
-            school in Settings retitles every page for every visitor. */}
+    
         <Link to="/" className="flex min-w-0 items-center gap-3">
           <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-white/15 text-white">
             <School className="size-5" aria-hidden="true" />
@@ -149,7 +263,7 @@ export default function TopNavBar() {
               {schoolName}
             </span>
             <span className="block truncate text-xs text-brand-200">
-              Grades 9 – 12{academicYear ? ` · ${academicYear}` : ''}
+              Nursery – Grade 12{academicYear ? ` · ${academicYear}` : ''}
             </span>
           </span>
         </Link>
@@ -165,6 +279,80 @@ export default function TopNavBar() {
         </nav>
 
         <div className="ml-auto flex items-center gap-2">
+          {isAuthenticated && unreadCount > 0 && (
+            <div className="relative" ref={notificationRef}>
+              <button
+                type="button"
+                className="relative grid size-9 shrink-0 place-items-center rounded-lg text-white hover:bg-white/10"
+                aria-label={`${unreadCount} unread notifications`}
+                title={`${unreadCount} unread notifications`}
+                aria-expanded={notificationOpen}
+                aria-haspopup="dialog"
+                onClick={() => setNotificationOpen((open) => !open)}
+              >
+                <Bell className="size-5" aria-hidden="true" />
+                <span className="absolute -top-0.5 -right-0.5 grid min-h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              </button>
+              <AnimatePresence>
+                {notificationOpen && (
+                  <motion.section
+                    initial={{ opacity: 0, y: -6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    role="dialog"
+                    aria-label="Notifications"
+                    className="absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white text-slate-900 shadow-xl sm:w-96"
+                  >
+                    <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                      <div>
+                        <h2 className="font-semibold">Notifications</h2>
+                        <p className="text-xs text-slate-500">{unreadCount} unread</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={markAllNotificationsRead}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-brand-700 hover:text-brand-900"
+                      >
+                        <CheckCheck className="size-4" aria-hidden="true" />
+                        Mark all as read
+                      </button>
+                    </div>
+                    {notificationError && (
+                      <p role="alert" className="border-b border-rose-100 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+                        {notificationError}
+                      </p>
+                    )}
+                    <div className="max-h-96 overflow-y-auto">
+                      {notificationBusy ? (
+                        <p className="px-4 py-8 text-center text-sm text-slate-500">Loading notifications…</p>
+                      ) : notifications.length ? notifications.map((notification) => (
+                        <button
+                          key={notification.id}
+                          type="button"
+                          onClick={() => markNotificationRead(notification)}
+                          disabled={readingNotificationIds.has(notification.id)}
+                          className={`block w-full border-b border-slate-100 px-4 py-3 text-left last:border-0 hover:bg-slate-50 disabled:opacity-60 ${notification.readAt ? 'bg-white' : 'bg-sky-50/70'}`}
+                        >
+                          <span className="flex items-start gap-2">
+                            {!notification.readAt && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-sky-600" aria-hidden="true" />}
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-sm font-semibold">{notification.title}</span>
+                              <span className="mt-0.5 block text-xs text-slate-600">{notification.message}</span>
+                              <span className="mt-1 block text-[11px] text-slate-400">{new Date(notification.createdAt).toLocaleString()}</span>
+                            </span>
+                          </span>
+                        </button>
+                      )) : (
+                        <p className="px-4 py-8 text-center text-sm text-slate-500">No recent notifications.</p>
+                      )}
+                    </div>
+                  </motion.section>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
           {isAuthenticated ? (
             <>
               {/* Separator: everything to the right of it is about the account, not the site. */}

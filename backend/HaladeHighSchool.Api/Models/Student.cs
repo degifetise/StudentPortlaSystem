@@ -24,6 +24,10 @@ public class Student
 
     public string? GuardianPhone { get; set; }
 
+    public string? EmergencyContact { get; set; }
+
+    public string? BloodGroup { get; set; }
+
     public string? Address { get; set; }
 
     public DateOnly EnrollmentDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -39,4 +43,6 @@ public class Student
     public ApplicationUser? User { get; set; }
 
     public ICollection<Mark> Marks { get; set; } = new List<Mark>();
+
+    public ICollection<StudentGuardian> StudentGuardians { get; set; } = new List<StudentGuardian>();
 }

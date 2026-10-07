@@ -1,6 +1,6 @@
 namespace HaladeHighSchool.Api.Models;
 
-/// <summary>Section A, B or C.</summary>
+/// <summary>Academic class section, such as Section A through Section F.</summary>
 public class Section
 {
     public int Id { get; set; }

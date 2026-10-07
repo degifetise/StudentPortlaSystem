@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { schoolApi } from '../services/endpoints';
 
 const FALLBACK = {
-  schoolName: 'Halade High School',
+  schoolName: 'School Management System',
   contactEmail: null,
   academicYear: '',
   allowSelfRegistration: false,

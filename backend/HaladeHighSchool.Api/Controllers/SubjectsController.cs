@@ -11,7 +11,7 @@ namespace HaladeHighSchool.Api.Controllers;
 
 /// <summary>
 /// Subject catalogue. Subjects are defined per grade level, so Mathematics exists once for
-/// each of Grades 9-12 with its own code.
+/// each grade level with its own code.
 /// </summary>
 [ApiController]
 [Route("api/subjects")]
@@ -188,16 +188,45 @@ public class SubjectsController : PortalControllerBase
             return NotFoundProblem($"Subject {id} was not found.");
         }
 
+        if (!await _db.GradeLevels.AnyAsync(g => g.Id == request.GradeLevelId, cancellationToken))
+        {
+            ModelState.AddModelError(nameof(request.GradeLevelId), "Unknown grade level.");
+            return ValidationProblem(ModelState);
+        }
+
         var name = request.SubjectName.Trim();
+        var code = request.Code.Trim();
 
         if (await _db.Subjects.AnyAsync(
-                s => s.Id != id && s.GradeLevelId == subject.GradeLevelId && s.SubjectName == name,
+                s => s.Id != id && s.GradeLevelId == request.GradeLevelId && s.SubjectName == name,
                 cancellationToken))
         {
-            return ConflictProblem("Duplicate subject", $"'{name}' already exists for this grade level.");
+            return ConflictProblem("Duplicate subject", $"'{name}' already exists for the selected grade level.");
+        }
+
+        if (await _db.Subjects.AnyAsync(s => s.Id != id && s.Code == code, cancellationToken))
+        {
+            return ConflictProblem("Duplicate code", $"Subject code '{code}' is already in use.");
+        }
+
+        if (subject.GradeLevelId != request.GradeLevelId)
+        {
+            var hasDependencies =
+                await _db.TeacherSubjects.AnyAsync(ts => ts.SubjectId == id, cancellationToken)
+                || await _db.Assessments.AnyAsync(a => a.SubjectId == id, cancellationToken)
+                || await _db.Lessons.AnyAsync(l => l.SubjectId == id, cancellationToken);
+
+            if (hasDependencies)
+            {
+                return ConflictProblem(
+                    "Subject grade cannot be changed",
+                    "This subject has teaching assignments, assessments, or lessons. Remove those dependencies before moving it to another grade level.");
+            }
         }
 
         subject.SubjectName = name;
+        subject.Code = code;
+        subject.GradeLevelId = request.GradeLevelId;
         subject.Description = request.Description;
         subject.CreditHours = request.CreditHours;
         subject.IsActive = request.IsActive;

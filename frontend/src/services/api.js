@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5006';
+export const API_BASE_URL = BASE_URL;
 
 export const STORAGE_KEYS = {
   accessToken: 'halade.accessToken',
@@ -15,7 +16,8 @@ export const STORAGE_KEYS = {
    the legitimate client refreshes.
    --------------------------------------------------------------------------- */
 export const tokenStore = {
-  getAccessToken: () => localStorage.getItem(STORAGE_KEYS.accessToken),
+  getAccessToken: () =>
+    localStorage.getItem(STORAGE_KEYS.accessToken) ?? localStorage.getItem('token'),
   getRefreshToken: () => localStorage.getItem(STORAGE_KEYS.refreshToken),
 
   getUser() {
@@ -36,6 +38,7 @@ export const tokenStore = {
 
   clear() {
     Object.values(STORAGE_KEYS).forEach((key) => localStorage.removeItem(key));
+    localStorage.removeItem('token');
   },
 };
 
@@ -64,16 +67,26 @@ function notifySessionExpired() {
 const api = axios.create({
   baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
   timeout: 30000,
 });
 
 /** Bare client for refreshing, so the interceptors below cannot recurse. */
-const refreshClient = axios.create({ baseURL: BASE_URL, timeout: 30000 });
+const refreshClient = axios.create({ baseURL: BASE_URL, withCredentials: true, timeout: 30000 });
 
 api.interceptors.request.use((config) => {
   const token = tokenStore.getAccessToken();
   if (token) {
+    config.headers = config.headers ?? {};
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    if (typeof config.headers?.delete === 'function') {
+      config.headers.delete('Content-Type');
+    } else if (config.headers) {
+      delete config.headers['Content-Type'];
+      delete config.headers['content-type'];
+    }
   }
   return config;
 });
@@ -120,9 +133,25 @@ api.interceptors.response.use(
       );
     }
 
-    const isAuthCall = config?.url?.includes('/api/auth/');
+    const problem = sanitizeProblemDetails(error);
+    if (shouldLogProblem(response.status)) {
+      console.error(formatProblemLog(config, problem));
+    }
 
-    if (response.status === 401 && !config._retried && !isAuthCall) {
+    // Login and other anonymous auth endpoints must surface their own 401. A protected
+    // endpoint such as /api/auth/me must still use the refresh-and-expire flow.
+    const anonymousAuthPaths = new Set([
+      '/api/auth/login',
+      '/api/auth/refresh',
+      '/api/auth/forgot-password',
+      '/api/auth/reset-password',
+      '/api/auth/register-student',
+      '/api/auth/register-student-with-photo',
+    ]);
+    const requestPath = config?.url?.split('?')[0];
+    const isAnonymousAuthCall = anonymousAuthPaths.has(requestPath);
+
+    if (response.status === 401 && !config._retried && !isAnonymousAuthCall) {
       config._retried = true;
 
       try {
@@ -138,7 +167,7 @@ api.interceptors.response.use(
       }
     }
 
-    if (response.status === 401 && isAuthCall) {
+    if (response.status === 401 && isAnonymousAuthCall) {
       return Promise.reject(
         Object.assign(error, { friendlyMessage: extractErrorMessage(error) }),
       );
@@ -146,33 +175,87 @@ api.interceptors.response.use(
 
     if (response.status === 403) {
       return Promise.reject(
-        Object.assign(error, {
-          friendlyMessage:
-            extractErrorMessage(error) ?? 'You do not have permission to perform this action.',
-        }),
+        { ...problem, friendlyMessage: problem.message ?? 'You do not have permission to perform this action.' },
       );
     }
 
-    return Promise.reject(Object.assign(error, { friendlyMessage: extractErrorMessage(error) }));
+    return Promise.reject(problem);
   },
 );
+
+function shouldLogProblem(status) {
+  return status === 400 || status === 404 || status === 409 || status >= 500;
+}
+
+function getRequestUrl(config) {
+  if (!config?.url) return 'unknown URL';
+  if (!config.baseURL) return config.url;
+
+  try {
+    return new URL(config.url, config.baseURL).toString();
+  } catch {
+    return `${config.baseURL}${config.url}`;
+  }
+}
+
+function getValidationMessages(data) {
+  if (!data?.errors || typeof data.errors !== 'object') return [];
+
+  return Object.entries(data.errors)
+    .flatMap(([field, values]) => (Array.isArray(values) ? values : [values]).map((value) => ({ field, value })))
+    .map(({ field, value }) => {
+      const message = typeof value === 'string' ? value : value?.message;
+      return message ? `${field}: ${message}` : null;
+    })
+    .filter(Boolean);
+}
+
+/** Converts ASP.NET ProblemDetails/ValidationProblemDetails into a safe UI error contract. */
+export function sanitizeProblemDetails(error) {
+  const data = error?.response?.data;
+  const validationMessages = getValidationMessages(data);
+  const detail = typeof data === 'string' ? data : data?.detail ?? null;
+  const title = typeof data === 'object' ? data?.title ?? null : null;
+  const message = detail ?? (validationMessages.length ? validationMessages.join(' ') : null) ?? title ?? error?.message ?? 'Something went wrong.';
+
+  return {
+    status: error?.response?.status ?? null,
+    message,
+    title,
+    detail,
+    traceId: typeof data === 'object' ? data?.traceId ?? null : null,
+    friendlyMessage: message,
+  };
+}
+
+function formatProblemLog(config, problem) {
+  const method = (config?.method ?? 'unknown').toUpperCase();
+  const url = getRequestUrl(config);
+  const trace = problem.traceId ? ` [traceId: ${problem.traceId}]` : '';
+  return `[API ${problem.status}] ${method} ${url} - ${problem.message}${trace}`;
+}
 
 /**
  * Flattens the API's ProblemDetails and ValidationProblemDetails shapes into one
  * readable sentence, so every screen can show `err.friendlyMessage` and be done.
  */
 export function extractErrorMessage(error) {
+  if (error?.message && !error.response) return error.message;
   const data = error?.response?.data;
 
   if (!data) return error?.message ?? 'Something went wrong.';
   if (typeof data === 'string') return data;
 
   if (data.errors && typeof data.errors === 'object') {
-    const messages = Object.values(data.errors).flat().filter(Boolean);
+    const messages = Object.values(data.errors)
+      .flatMap((value) => Array.isArray(value) ? value : [value])
+      .filter(Boolean)
+      .map((message) => typeof message === 'string' ? message : message.message)
+      .filter(Boolean);
     if (messages.length) return messages.join(' ');
   }
 
-  return data.detail ?? data.title ?? error.message ?? 'Something went wrong.';
+  return data.detail ?? data.message ?? data.error ?? data.title ?? error.message ?? 'Something went wrong.';
 }
 
 export { BASE_URL };

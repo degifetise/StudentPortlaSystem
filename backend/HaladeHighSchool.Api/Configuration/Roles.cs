@@ -5,11 +5,15 @@ public static class Roles
 {
     public const string Admin = "Admin";
     public const string Teacher = "Teacher";
+    public const string Staff = "Staff";
     public const string Student = "Student";
+    public const string Guardian = "Guardian";
 
     public const string AdminOrTeacher = Admin + "," + Teacher;
+    public const string AdminTeacherOrStaff = Admin + "," + Teacher + "," + Staff;
+    public const string TeacherOrStaff = Teacher + "," + Staff;
 
-    public static readonly string[] All = [Admin, Teacher, Student];
+    public static readonly string[] All = [Admin, Teacher, Staff, Student, Guardian];
 }
 
 /// <summary>Custom JWT claim types used by the portal.</summary>
@@ -20,6 +24,9 @@ public static class PortalClaims
 
     /// <summary>Teachers.Id of the signed-in teacher, when the user is a teacher.</summary>
     public const string TeacherId = "teacher_id";
+
+    /// <summary>Guardians.Id of the signed-in guardian, when the user is a guardian.</summary>
+    public const string GuardianId = "guardian_id";
 
     public const string GradeLevelId = "grade_level_id";
 

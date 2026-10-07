@@ -102,7 +102,8 @@ public class GradingPolicyService : IGradingPolicyService
         var snapshot = new WeightSnapshot(
             weights.Select(w => w.Dto).ToList(),
             weights.Where(w => w.IsActive).Select(w => w.Dto).ToList(),
-            rows.ToDictionary(w => w.Name, w => w.WeightPercentage, StringComparer.OrdinalIgnoreCase));
+            rows.Where(w => w.IsActive)
+                .ToDictionary(w => w.Name, w => w.WeightPercentage, StringComparer.OrdinalIgnoreCase));
 
         _cache.Set(CacheKey, snapshot, CacheDuration);
 

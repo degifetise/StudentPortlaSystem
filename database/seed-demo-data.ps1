@@ -6,8 +6,7 @@
     five weighted assessments per subject, and published marks for all of them.
 
     Safe to re-run: an account or assessment that already exists is reused instead of
-    duplicated. Do not run this against a live school database - the passwords below are
-    well known.
+    duplicated. Do not run this against a live school database.
 
     Usage:  pwsh -File database/seed-demo-data.ps1        (with the API running)
 #>
@@ -15,6 +14,23 @@ param([string]$ApiBaseUrl = 'http://localhost:5006')
 
 $ErrorActionPreference = 'Continue'
 $base = $ApiBaseUrl
+
+$requiredSecrets = @(
+    'SMS_ADMIN_EMAIL',
+    'SMS_ADMIN_PASSWORD',
+    'SMS_DEMO_TEACHER_PASSWORD',
+    'SMS_DEMO_STUDENT_PASSWORD'
+)
+$missingSecrets = @($requiredSecrets | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+if ($missingSecrets.Count -gt 0) {
+    Write-Error "Set these environment variables before running this script: $($missingSecrets -join ', ')"
+    exit 1
+}
+
+$ADMIN_EMAIL = $env:SMS_ADMIN_EMAIL
+$ADMIN_PASS = $env:SMS_ADMIN_PASSWORD
+$TEACHER_PASS = $env:SMS_DEMO_TEACHER_PASSWORD
+$STUDENT_PASS = $env:SMS_DEMO_STUDENT_PASSWORD
 
 function Invoke-Api {
     param([string]$Method, [string]$Path, $Body, [string]$Token)
@@ -35,12 +51,10 @@ function Invoke-Api {
     }
 }
 
-$TEACHER_EMAIL = 'k.abebe@haladehighschool.edu'
-$TEACHER_PASS  = 'Teacher@12345'
-$STUDENT_PASS  = 'Student@12345'
+$TEACHER_EMAIL = 'k.abebe@sms.edu'
 
 Write-Host "--- Admin login ---"
-$admin = Invoke-Api POST '/api/auth/login' @{ email = 'admin@haladehighschool.edu'; password = 'Admin@12345' }
+$admin = Invoke-Api POST '/api/auth/login' @{ email = $ADMIN_EMAIL; password = $ADMIN_PASS }
 if (-not $admin.Ok) { Write-Host "FAILED: $($admin.Body)"; exit 1 }
 $at = $admin.Body.accessToken
 Write-Host "OK"
@@ -78,16 +92,16 @@ foreach ($s in $chosen) {
 
 Write-Host "`n--- Students ---"
 $studentNames = @(
-    @{ n = 'Abel Tesfaye';    e = 'abel.t@haladehighschool.edu' },
-    @{ n = 'Bethel Girma';    e = 'bethel.g@haladehighschool.edu' },
-    @{ n = 'Caleb Mekonnen';  e = 'caleb.m@haladehighschool.edu' },
-    @{ n = 'Dina Haile';      e = 'dina.h@haladehighschool.edu' },
-    @{ n = 'Eyob Solomon';    e = 'eyob.s@haladehighschool.edu' }
+    @{ n = 'Abel Tesfaye' },
+    @{ n = 'Bethel Girma' },
+    @{ n = 'Caleb Mekonnen' },
+    @{ n = 'Dina Haile' },
+    @{ n = 'Eyob Solomon' }
 )
 
 foreach ($s in $studentNames) {
     $r = Invoke-Api POST '/api/students' @{
-        email = $s.e; password = $STUDENT_PASS; fullName = $s.n
+        password = $STUDENT_PASS; fullName = $s.n
         gradeLevelId = $grade9.id; sectionId = $secA.id
     } -Token $at
     Write-Host "  $($s.n): $(if ($r.Ok) {"created $($r.Body.student.studentIdNumber)"} else {"HTTP $($r.Status) (probably exists)"})"
@@ -163,6 +177,6 @@ if ($student.Ok) {
 }
 
 Write-Host "`n=== Credentials for the browser check ==="
-Write-Host "  admin@haladehighschool.edu / Admin@12345"
-Write-Host "  $TEACHER_EMAIL / $TEACHER_PASS"
-Write-Host "  $($studentNames[0].e) / $STUDENT_PASS"
+Write-Host "  Admin: $ADMIN_EMAIL (password configured outside this script)"
+Write-Host "  Teacher: $TEACHER_EMAIL (password configured outside this script)"
+Write-Host "  Demo student (password configured outside this script)"

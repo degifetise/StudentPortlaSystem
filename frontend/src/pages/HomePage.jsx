@@ -56,7 +56,7 @@ export default function HomePage() {
               <Skeleton className="h-4 w-40 bg-white/20" />
             ) : (
               <p className="text-sm font-semibold tracking-wide text-brand-200 uppercase">
-                {data?.academicYear ? `Academic year ${data.academicYear}` : 'Grades 9 – 12'}
+                {data?.academicYear ? `Academic year ${data.academicYear}` : 'Nursery – Grade 12'}
               </p>
             )}
 
@@ -66,7 +66,7 @@ export default function HomePage() {
               ) : (
                 <>
                   {data?.schoolName}
-                  <span className="block text-brand-200">Grades 9 to 12, one portal.</span>
+                  <span className="block text-brand-200">Nursery through Grade 12, one portal.</span>
                 </>
               )}
             </h1>
@@ -146,7 +146,7 @@ export default function HomePage() {
                     icon={Layers}
                     label="Grades"
                     value={totals.gradeLevels}
-                    hint="Grade 9 through Grade 12"
+                    hint="Nursery through Grade 12"
                   />
                 </>
               )}

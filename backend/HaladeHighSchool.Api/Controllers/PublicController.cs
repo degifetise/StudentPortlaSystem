@@ -77,7 +77,7 @@ public class PublicController : PortalControllerBase
             Sections = sections.Count
         };
 
-        var weights = await _grading.GetAllAsync(cancellationToken);
+        var weights = await _grading.GetActiveAsync(cancellationToken);
 
         return Ok(new PublicOverviewResponse
         {

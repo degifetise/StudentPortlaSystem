@@ -3,6 +3,7 @@ import { UserPlus } from 'lucide-react';
 import { authApi } from '../../services/endpoints';
 import { extractErrorMessage } from '../../services/api';
 import { Alert, Spinner } from '../ui/Feedback';
+import ProfilePhotoField from './ProfilePhotoField';
 
 /**
  * Public application for a place at the school.
@@ -19,25 +20,34 @@ export default function StudentRegistrationForm({ gradeLevels = [], sections = [
   const [form, setForm] = useState({
     fullName: '',
     email: '',
+    requestedRole: 'Student',
     gradeLevelId: '',
     sectionId: '',
   });
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [photo, setPhoto] = useState(null);
+  const [photoPending, setPhotoPending] = useState(false);
 
   const update = (key) => (event) => setForm((prev) => ({ ...prev, [key]: event.target.value }));
 
   async function submit(event) {
     event.preventDefault();
     setError(null);
+    if (photoPending) {
+      setError('Confirm or cancel the selected photo before submitting your registration.');
+      return;
+    }
     setSubmitting(true);
 
     try {
       const receipt = await authApi.registerStudent({
         fullName: form.fullName.trim(),
         email: form.email.trim(),
-        gradeLevelId: Number(form.gradeLevelId),
-        sectionId: Number(form.sectionId),
+        requestedRole: form.requestedRole,
+        gradeLevelId: form.requestedRole === 'Student' ? Number(form.gradeLevelId) : null,
+        sectionId: form.requestedRole === 'Student' ? Number(form.sectionId) : null,
+        photo,
       });
 
       onSubmitted(
@@ -89,12 +99,28 @@ export default function StudentRegistrationForm({ gradeLevels = [], sections = [
           placeholder="you@example.com"
         />
         <p className="mt-1 text-xs text-slate-500">
-          Where the school will send your student number, school sign-in address and temporary
-          password once your registration is approved.
+          Where the school will send your school sign-in address and temporary password once your
+          registration is approved.
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div>
+        <label className="label" htmlFor="register-role">
+          Applying as
+        </label>
+        <select
+          id="register-role"
+          className="input"
+          required
+          value={form.requestedRole}
+          onChange={update('requestedRole')}
+        >
+          <option value="Student">Student</option>
+          <option value="Teacher">Teacher</option>
+        </select>
+      </div>
+
+      {form.requestedRole === 'Student' && <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label className="label" htmlFor="register-grade">
             Grade
@@ -135,7 +161,19 @@ export default function StudentRegistrationForm({ gradeLevels = [], sections = [
           </select>
           <p className="mt-1 text-xs text-slate-500">The school may move you to another section.</p>
         </div>
-      </div>
+      </div>}
+
+      <ProfilePhotoField
+        file={photo}
+        onChange={setPhoto}
+        onPendingChange={setPhotoPending}
+        disabled={submitting}
+      />
+
+      <p className="rounded-lg border border-brand-100 bg-brand-50 px-3 py-2 text-sm text-brand-800">
+        A unique Smart ID is generated automatically when your registration is approved. You can
+        include your optional photo now; it will be attached to your account and Smart ID if approved.
+      </p>
 
       <button type="submit" className="btn-primary w-full" disabled={submitting}>
         {submitting ? <Spinner className="size-4" /> : <UserPlus className="size-4" aria-hidden="true" />}

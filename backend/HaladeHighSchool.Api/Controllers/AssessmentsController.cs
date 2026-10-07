@@ -133,6 +133,20 @@ public class AssessmentsController : PortalControllerBase
         CreateAssessmentRequest request,
         CancellationToken cancellationToken)
     {
+        if (request.AssessmentType == AssessmentType.Other)
+        {
+            if (!User.IsAdmin())
+            {
+                return ForbiddenProblem("Only administrators may create custom assessment types.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.CustomTypeTitle))
+            {
+                ModelState.AddModelError(nameof(request.CustomTypeTitle), "Specify a name for this assessment type.");
+                return ValidationProblem(ModelState);
+            }
+        }
+
         if (!await _db.Subjects.AnyAsync(s => s.Id == request.SubjectId && s.IsActive, cancellationToken))
         {
             ModelState.AddModelError(nameof(request.SubjectId), "Unknown or inactive subject.");
@@ -153,8 +167,13 @@ public class AssessmentsController : PortalControllerBase
 
         var assessment = new Assessment
         {
-            Title = request.Title.Trim(),
+            Title = request.AssessmentType == AssessmentType.Other
+                ? request.CustomTypeTitle!.Trim()
+                : request.Title.Trim(),
             AssessmentType = request.AssessmentType,
+            CustomTypeTitle = request.AssessmentType == AssessmentType.Other
+                ? request.CustomTypeTitle!.Trim()
+                : null,
             MaxScore = request.MaxScore,
             SubjectId = request.SubjectId,
             SectionId = request.SectionId,
@@ -207,6 +226,18 @@ public class AssessmentsController : PortalControllerBase
             return denial;
         }
 
+        var updatedType = request.AssessmentType ?? assessment.AssessmentType;
+        if ((updatedType == AssessmentType.Other || assessment.AssessmentType == AssessmentType.Other) && !User.IsAdmin())
+        {
+            return ForbiddenProblem("Only administrators may create or edit custom assessment types.");
+        }
+
+        if (updatedType == AssessmentType.Other && string.IsNullOrWhiteSpace(request.CustomTypeTitle ?? assessment.CustomTypeTitle))
+        {
+            ModelState.AddModelError(nameof(request.CustomTypeTitle), "Specify a name for this assessment type.");
+            return ValidationProblem(ModelState);
+        }
+
         if (request.MaxScore < assessment.MaxScore)
         {
             var highestMark = await _db.Marks
@@ -222,7 +253,13 @@ public class AssessmentsController : PortalControllerBase
             }
         }
 
-        assessment.Title = request.Title.Trim();
+        assessment.AssessmentType = updatedType;
+        assessment.CustomTypeTitle = updatedType == AssessmentType.Other
+            ? (request.CustomTypeTitle ?? assessment.CustomTypeTitle)!.Trim()
+            : null;
+        assessment.Title = updatedType == AssessmentType.Other
+            ? assessment.CustomTypeTitle!
+            : request.Title.Trim();
         assessment.MaxScore = request.MaxScore;
         assessment.DueDate = request.DueDate;
         assessment.IsActive = request.IsActive;
@@ -330,6 +367,7 @@ public class AssessmentsController : PortalControllerBase
             Id = a.Id,
             Title = a.Title,
             AssessmentType = a.AssessmentType,
+            CustomTypeTitle = a.CustomTypeTitle,
             MaxScore = a.MaxScore,
             SubjectId = a.SubjectId,
             SubjectName = a.Subject!.SubjectName,

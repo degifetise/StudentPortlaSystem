@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { ClipboardList, Search, Users } from 'lucide-react';
-import { teacherApi } from '../../services/endpoints';
+import { ClipboardList, Download, Search, Users } from 'lucide-react';
+import { reportPdfApi, teacherApi } from '../../services/endpoints';
 import { extractErrorMessage } from '../../services/api';
-import { Badge, EmptyState, ErrorState, LoadingPanel } from '../../components/ui/Feedback';
+import { Alert, Badge, EmptyState, ErrorState, LoadingPanel, Spinner } from '../../components/ui/Feedback';
 
 const gradeTone = (letter) => {
   if (!letter) return 'slate';
@@ -13,6 +13,20 @@ const gradeTone = (letter) => {
   if (letter.startsWith('C')) return 'amber';
   return 'red';
 };
+
+const TEACHER_LINK_ERROR =
+  'Your account is logged in, but not yet linked to an active Teacher profile or class assignment. Please contact your system administrator.';
+
+function teacherAccessMessage(error) {
+  const status = error?.status ?? error?.response?.status;
+  if (status === 503) {
+    return 'The database is temporarily unavailable. Please check the SQL Server service or contact your system administrator.';
+  }
+
+  return status === 403 || status === 404
+    ? TEACHER_LINK_ERROR
+    : error?.friendlyMessage ?? extractErrorMessage(error) ?? 'We could not load this class list. Please try again.';
+}
 
 function ClassSummary({ roster }) {
   const cards = [
@@ -52,11 +66,17 @@ export default function TeacherStudents() {
   const [assignmentId, setAssignmentId] = useState('');
   const [roster, setRoster] = useState(null);
   const [search, setSearch] = useState('');
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [downloadError, setDownloadError] = useState(null);
 
   const [loading, setLoading] = useState(true);
   const [classesError, setClassesError] = useState(null);
   const [rosterLoading, setRosterLoading] = useState(false);
   const [rosterError, setRosterError] = useState(null);
+  const rosterRequestInFlight = useRef(false);
+  const assignmentIdRef = useRef(assignmentId);
+  const loadRosterRef = useRef(null);
+  assignmentIdRef.current = assignmentId;
 
   const loadClasses = useCallback(async () => {
     setLoading(true);
@@ -64,10 +84,12 @@ export default function TeacherStudents() {
 
     try {
       const data = await teacherApi.myClasses();
-      setClasses(data);
-      if (data.length > 0) setAssignmentId(String(data[0].id));
+      const assignments = Array.isArray(data) ? data : [];
+      setClasses(assignments);
+      if (assignments.length > 0) setAssignmentId(String(assignments[0].id));
+      else setAssignmentId('');
     } catch (err) {
-      setClassesError(err.friendlyMessage ?? extractErrorMessage(err));
+      setClassesError(teacherAccessMessage(err));
     } finally {
       setLoading(false);
     }
@@ -80,24 +102,65 @@ export default function TeacherStudents() {
   const loadRoster = useCallback(async () => {
     if (!assignmentId) {
       setRoster(null);
+      setRosterLoading(false);
       return;
     }
 
+    if (rosterRequestInFlight.current) return;
+    rosterRequestInFlight.current = true;
+    const requestedAssignmentId = assignmentId;
     setRosterLoading(true);
     setRosterError(null);
+    setRoster(null);
 
     try {
-      setRoster(await teacherApi.classRoster(assignmentId));
+      const result = await teacherApi.classRoster(requestedAssignmentId);
+      if (assignmentIdRef.current === requestedAssignmentId) {
+        setRoster(Array.isArray(result) ? {
+          assignmentId: Number(requestedAssignmentId),
+          students: result,
+          markedCount: 0,
+          passCount: 0,
+          classAverage: null,
+          passMarkPercentage: 50,
+        } : {
+          ...result,
+          students: Array.isArray(result?.students) ? result.students : [],
+        });
+      }
     } catch (err) {
+      const status = err?.status ?? err?.response?.status;
+      if (assignmentIdRef.current !== requestedAssignmentId) return;
+      if (status === 404) {
+        setRoster({
+          assignmentId: Number(requestedAssignmentId),
+          students: [],
+          markedCount: 0,
+          passCount: 0,
+          classAverage: null,
+          passMarkPercentage: 50,
+        });
+        setRosterError(null);
+        return;
+      }
+
       setRoster(null);
-      setRosterError(err.friendlyMessage ?? extractErrorMessage(err));
+      setRosterError(teacherAccessMessage(err));
     } finally {
-      setRosterLoading(false);
+      rosterRequestInFlight.current = false;
+      if (assignmentIdRef.current === requestedAssignmentId) {
+        setRosterLoading(false);
+      } else if (assignmentIdRef.current) {
+        loadRosterRef.current?.();
+      }
     }
   }, [assignmentId]);
+  loadRosterRef.current = loadRoster;
 
   useEffect(() => {
     loadRoster();
+    const interval = setInterval(loadRoster, 300000);
+    return () => clearInterval(interval);
   }, [loadRoster]);
 
   const visible = useMemo(() => {
@@ -111,6 +174,19 @@ export default function TeacherStudents() {
         student.studentIdNumber.toLowerCase().includes(term),
     );
   }, [roster, search]);
+
+  async function downloadSectionRoster() {
+    if (!roster?.sectionId) return;
+    setDownloadingPdf(true);
+    setDownloadError(null);
+    try {
+      await reportPdfApi.teacherSectionRoster(roster.sectionId);
+    } catch (err) {
+      setDownloadError(err.friendlyMessage ?? err.message ?? 'The section roster PDF could not be downloaded.');
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
 
   if (loading) return <LoadingPanel label="Loading your classes…" />;
 
@@ -130,6 +206,11 @@ export default function TeacherStudents() {
 
   return (
     <div className="space-y-6">
+      {downloadError && (
+        <Alert variant="error" title="PDF download failed" onDismiss={() => setDownloadError(null)}>
+          {downloadError}
+        </Alert>
+      )}
       <section className="card p-5">
         <label htmlFor="class-picker" className="label">
           Class
@@ -149,12 +230,23 @@ export default function TeacherStudents() {
           </select>
 
           {roster && (
-            /* Mark entry is not in the navigation bar, so this is the way in - and it carries
-               the class along so the teacher does not choose it twice. */
-            <Link to={`/teacher/marks?assignment=${roster.assignmentId}`} className="btn-primary">
-              <ClipboardList className="size-4" aria-hidden="true" />
-              Enter marks for this class
-            </Link>
+            <>
+              {/* Mark entry is not in the navigation bar, so this is the way in - and it carries
+                  the class along so the teacher does not choose it twice. */}
+              <Link to={`/teacher/marks?assignment=${roster.assignmentId}`} className="btn-primary">
+                <ClipboardList className="size-4" aria-hidden="true" />
+                Enter marks for this class
+              </Link>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={downloadSectionRoster}
+                disabled={downloadingPdf}
+              >
+                {downloadingPdf ? <Spinner className="size-4" /> : <Download className="size-4" aria-hidden="true" />}
+                {downloadingPdf ? 'Downloading PDF…' : 'Download Section Roster PDF'}
+              </button>
+            </>
           )}
         </div>
       </section>
@@ -202,7 +294,7 @@ export default function TeacherStudents() {
               <div className="p-5">
                 <EmptyState
                   icon={Users}
-                  title={search ? 'Nobody in this class matches that' : 'No students in this class yet'}
+                  title={search ? 'Nobody in this class matches that' : 'No students found in this section'}
                   description={
                     search
                       ? undefined

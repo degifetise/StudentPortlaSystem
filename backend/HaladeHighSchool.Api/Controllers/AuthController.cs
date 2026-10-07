@@ -20,6 +20,7 @@ public class AuthController : ControllerBase
     private readonly ITokenService _tokenService;
     private readonly IRegistrationRequestService _registrations;
     private readonly ISystemSettingsService _settings;
+    private readonly IPasswordResetService _passwordResets;
     private readonly ILogger<AuthController> _logger;
 
     public AuthController(
@@ -29,6 +30,7 @@ public class AuthController : ControllerBase
         ITokenService tokenService,
         IRegistrationRequestService registrations,
         ISystemSettingsService settings,
+        IPasswordResetService passwordResets,
         ILogger<AuthController> logger)
     {
         _db = db;
@@ -37,6 +39,7 @@ public class AuthController : ControllerBase
         _tokenService = tokenService;
         _registrations = registrations;
         _settings = settings;
+        _passwordResets = passwordResets;
         _logger = logger;
     }
 
@@ -53,6 +56,21 @@ public class AuthController : ControllerBase
         // cannot be used to discover which accounts exist.
         if (user is null)
         {
+            var hasPendingApplication = await _db.StudentRegistrationRequests.AnyAsync(
+                registration => registration.ContactEmail == request.Email
+                    && registration.Status == RegistrationRequestStatus.Pending,
+                cancellationToken);
+
+            if (hasPendingApplication)
+            {
+                return Unauthorized(new ProblemDetails
+                {
+                    Title = "Approval pending",
+                    Detail = "Your account is pending administrator approval.",
+                    Status = StatusCodes.Status401Unauthorized
+                });
+            }
+
             return Unauthorized(new ProblemDetails
             {
                 Title = "Invalid credentials",
@@ -110,6 +128,49 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
+    /// Starts a password reset without revealing whether the email belongs to an account.
+    /// Email delivery is attached by the configured email sender.
+    /// </summary>
+    [HttpPost("forgot-password")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    public async Task<IActionResult> ForgotPassword(
+        ForgotPasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _passwordResets.RequestResetAsync(
+            request.Email,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            cancellationToken);
+
+        return Accepted();
+    }
+
+    /// <summary>Consumes a valid one-time reset token and applies the new password.</summary>
+    [HttpPost("reset-password")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ResetPassword(
+        ResetPasswordRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _passwordResets.ResetPasswordAsync(
+            request.Token,
+            request.NewPassword,
+            cancellationToken);
+
+        return result.Succeeded
+            ? NoContent()
+            : BadRequest(new ValidationProblemDetails
+            {
+                Title = "Password reset failed",
+                Status = StatusCodes.Status400BadRequest,
+                Errors = { ["reset"] = [.. result.Errors] },
+            });
+    }
+
+    /// <summary>
     /// Submits an application for a place. Anonymous, and allowed only while the
     /// AllowSelfRegistration system setting is on.
     ///
@@ -123,7 +184,25 @@ public class AuthController : ControllerBase
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> RegisterStudent(
+    public Task<IActionResult> RegisterStudent(
+        [FromBody] RegisterStudentRequest request,
+        CancellationToken cancellationToken)
+        => SubmitRegistrationAsync(request, cancellationToken);
+
+    [HttpPost("register-student-with-photo")]
+    [AllowAnonymous]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit((2 * 1024 * 1024) + (64 * 1024))]
+    [ProducesResponseType<RegistrationSubmittedResponse>(StatusCodes.Status202Accepted)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public Task<IActionResult> RegisterStudentWithPhoto(
+        [FromForm] RegisterStudentRequest request,
+        CancellationToken cancellationToken)
+        => SubmitRegistrationAsync(request, cancellationToken);
+
+    private async Task<IActionResult> SubmitRegistrationAsync(
         RegisterStudentRequest request,
         CancellationToken cancellationToken)
     {
@@ -137,7 +216,20 @@ public class AuthController : ControllerBase
             });
         }
 
-        var result = await _registrations.SubmitAsync(request, cancellationToken);
+        RegistrationResult<StudentRegistrationRequest> result;
+        try
+        {
+            result = await _registrations.SubmitAsync(request, cancellationToken);
+        }
+        catch (InvalidProfilePhotoException ex)
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Invalid profile photo",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
 
         if (!result.Succeeded || result.Value is null)
         {
@@ -164,6 +256,7 @@ public class AuthController : ControllerBase
         {
             RequestId = submitted.Id,
             Status = submitted.Status,
+            RequestedRole = submitted.RequestedRole,
             FullName = submitted.FullName,
             ContactEmail = submitted.ContactEmail,
             GradeLevelName = submitted.GradeLevel?.Name ?? string.Empty,
@@ -171,7 +264,7 @@ public class AuthController : ControllerBase
             SubmittedAt = submitted.SubmittedAt,
             Message =
                 "Your registration has been received. The school will review it and email your "
-              + "student number, sign-in address and a temporary password to "
+                            + "issued sign-in details and a temporary password to "
               + $"{submitted.ContactEmail}."
         });
     }

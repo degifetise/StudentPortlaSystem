@@ -1,0 +1,53 @@
+@baseUrl = http://localhost:5006
+@adminToken = replace-with-an-admin-access-token
+@guardianToken = replace-with-a-guardian-access-token
+@guardianId = 1
+@studentId = 1
+
+### List guardians and their linked students (Admin)
+GET {{baseUrl}}/api/admin/guardians
+Authorization: Bearer {{adminToken}}
+
+### Get one guardian (Admin)
+GET {{baseUrl}}/api/admin/guardians/{{guardianId}}
+Authorization: Bearer {{adminToken}}
+
+### Register a parent (Admin); copy the one-time temporary password from the response
+POST {{baseUrl}}/api/admin/register-parent
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "firstName": "Aster",
+  "lastName": "Example",
+  "email": "aster.parent@example.com",
+  "phoneNumber": "+251900000000"
+}
+
+### Link a registered guardian to a student (Admin)
+POST {{baseUrl}}/api/admin/guardians/link-student
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "guardianId": {{guardianId}},
+  "studentId": {{studentId}},
+  "relationship": "Mother"
+}
+
+### The authenticated guardian's linked students only
+GET {{baseUrl}}/api/parent/my-students
+Authorization: Bearer {{guardianToken}}
+
+### Attendance for a linked student; an unlinked ID must return 403
+GET {{baseUrl}}/api/parent/student/{{studentId}}/attendance
+Authorization: Bearer {{guardianToken}}
+
+### Published results for a linked student; an unlinked ID must return 403
+GET {{baseUrl}}/api/parent/student/{{studentId}}/results
+Authorization: Bearer {{guardianToken}}
+
+### Report card PDF for a linked student; an unlinked ID must return 403
+GET {{baseUrl}}/api/parent/student/{{studentId}}/report-card-pdf
+Authorization: Bearer {{guardianToken}}
+Accept: application/pdf

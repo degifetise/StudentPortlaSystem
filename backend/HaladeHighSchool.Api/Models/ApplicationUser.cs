@@ -12,6 +12,10 @@ public class ApplicationUser : IdentityUser
 
     public string? ProfileImageUrl { get; set; }
 
+    public string? PhotoUrl { get; set; }
+
+    public string? DigitalSignatureUrl { get; set; }
+
     public bool IsActive { get; set; } = true;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -22,5 +26,9 @@ public class ApplicationUser : IdentityUser
 
     public Teacher? Teacher { get; set; }
 
+    public Guardian? Guardian { get; set; }
+
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();
+
+    public SmartCard? SmartCard { get; set; }
 }

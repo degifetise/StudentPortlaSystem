@@ -140,7 +140,7 @@ export default function AdminSettings() {
               maxLength={256}
               value={form.contactEmail}
               onChange={update('contactEmail')}
-              placeholder="info@haladehighschool.edu"
+              placeholder="info@sms.edu"
             />
             <p className="mt-1.5 text-xs text-slate-500">Leave blank to remove it.</p>
           </div>

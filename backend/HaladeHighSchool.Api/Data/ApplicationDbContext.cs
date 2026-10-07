@@ -4,13 +4,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HaladeHighSchool.Api.Data;
 
-/// <summary>
-/// The schema is owned by the Phase 1 T-SQL script, so this context is configured to
-/// match that database exactly rather than to generate it. Delete behaviours mirror the
-/// foreign keys defined in SQL, which keeps EF's in-memory fix-up consistent with what
-/// the server will actually do.
-/// </summary>
-public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
+
+public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplicationDbContext
 {
     public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
         : base(options)
@@ -22,6 +17,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<Subject> Subjects => Set<Subject>();
     public DbSet<Student> Students => Set<Student>();
     public DbSet<Teacher> Teachers => Set<Teacher>();
+    public DbSet<Guardian> Guardians => Set<Guardian>();
+    public DbSet<StudentGuardian> StudentGuardians => Set<StudentGuardian>();
     public DbSet<TeacherSubject> TeacherSubjects => Set<TeacherSubject>();
     public DbSet<Lesson> Lessons => Set<Lesson>();
     public DbSet<Assessment> Assessments => Set<Assessment>();
@@ -32,6 +29,17 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<SystemSetting> SystemSettings => Set<SystemSetting>();
     public DbSet<StudentRegistrationRequest> StudentRegistrationRequests => Set<StudentRegistrationRequest>();
     public DbSet<PasswordChangeLog> PasswordChangeLogs => Set<PasswordChangeLog>();
+      public DbSet<PasswordResetRequest> PasswordResetRequests => Set<PasswordResetRequest>();
+      public DbSet<Attendance> Attendance => Set<Attendance>();
+      public DbSet<Event> Events => Set<Event>();
+      public DbSet<EventRegistration> EventRegistrations => Set<EventRegistration>();
+      public DbSet<Notification> Notifications => Set<Notification>();
+      public DbSet<StudentFeedback> StudentFeedbacks => Set<StudentFeedback>();
+      public DbSet<EventComment> EventComments => Set<EventComment>();
+      public DbSet<SmartCard> SmartCards => Set<SmartCard>();
+      public DbSet<SmartIDScanLog> SmartIDScanLogs => Set<SmartIDScanLog>();
+      public DbSet<FeeInvoice> FeeInvoices => Set<FeeInvoice>();
+      public DbSet<FeePayment> FeePayments => Set<FeePayment>();
 
     /// <summary>Weighted report card rows produced by vw_StudentSubjectPerformance.</summary>
     public DbSet<StudentSubjectPerformance> StudentSubjectPerformances => Set<StudentSubjectPerformance>();
@@ -46,7 +54,80 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         ConfigureContent(builder);
         ConfigureAssessment(builder);
         ConfigureCommunication(builder);
+        ConfigureFeedbackAndComments(builder);
         ConfigureViews(builder);
+        ConfigureSmartId(builder);
+        ConfigureFees(builder);
+    }
+
+    private static void ConfigureSmartId(ModelBuilder builder)
+    {
+        builder.Entity<SmartCard>(entity =>
+        {
+            entity.ToTable("SmartCards");
+            entity.HasKey(card => card.CardId);
+            entity.Property(card => card.CardId).HasDefaultValueSql("NEWID()");
+            entity.Property(card => card.UserId).HasMaxLength(450).IsRequired();
+            entity.Property(card => card.CardUID).HasMaxLength(100).IsRequired();
+            entity.Property(card => card.QrTokenHash).HasMaxLength(512).IsRequired();
+            entity.Property(card => card.CardType).HasMaxLength(20).IsRequired();
+            entity.Property(card => card.Status).HasMaxLength(20).HasDefaultValue("ACTIVE").IsRequired();
+            entity.Property(card => card.IssuedDate).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.Property(card => card.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(card => card.UserId).IsUnique().HasDatabaseName("UQ_SmartCards_UserId");
+            entity.HasIndex(card => card.CardUID).IsUnique().HasDatabaseName("UQ_SmartCards_CardUID");
+            entity.HasOne(card => card.User)
+                .WithOne(user => user.SmartCard)
+                .HasForeignKey<SmartCard>(card => card.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<SmartIDScanLog>(entity =>
+        {
+            entity.ToTable("SmartIDScanLogs");
+            entity.HasKey(log => log.Id);
+            entity.Property(log => log.Id).ValueGeneratedOnAdd();
+            entity.Property(log => log.ScannerUserId).HasMaxLength(450).IsRequired();
+            entity.Property(log => log.ScannedUserId).HasMaxLength(450);
+            entity.Property(log => log.ScanLocation).HasMaxLength(200);
+            entity.Property(log => log.ScanStatus).HasMaxLength(20).IsRequired();
+            entity.Property(log => log.ScanTimestamp).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(log => log.ScanTimestamp).HasDatabaseName("IX_SmartIDScanLogs_ScanTimestamp");
+        });
+    }
+
+    private static void ConfigureFees(ModelBuilder builder)
+    {
+        builder.Entity<FeeInvoice>(entity =>
+        {
+            entity.ToTable("FeeInvoices");
+            entity.HasKey(invoice => invoice.Id);
+            entity.Property(invoice => invoice.AcademicYear).HasMaxLength(9).IsRequired();
+            entity.Property(invoice => invoice.Term).HasMaxLength(20);
+            entity.Property(invoice => invoice.Description).HasMaxLength(200).IsRequired();
+            entity.Property(invoice => invoice.AmountDue).HasPrecision(10, 2);
+            entity.Property(invoice => invoice.IsVoided).HasDefaultValue(false);
+            entity.Property(invoice => invoice.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasOne(invoice => invoice.Student)
+                .WithMany()
+                .HasForeignKey(invoice => invoice.StudentId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(invoice => invoice.Payments)
+                .WithOne(payment => payment.Invoice)
+                .HasForeignKey(payment => payment.InvoiceId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<FeePayment>(entity =>
+        {
+            entity.ToTable("FeePayments");
+            entity.HasKey(payment => payment.Id);
+            entity.Property(payment => payment.AmountPaid).HasPrecision(10, 2);
+            entity.Property(payment => payment.PaymentMethod).HasMaxLength(30);
+            entity.Property(payment => payment.RecordedByUserId).HasMaxLength(450);
+            entity.Property(payment => payment.PaidAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(payment => payment.InvoiceId).HasDatabaseName("IX_FeePayments_InvoiceId");
+        });
     }
 
     private static void ConfigureIdentity(ModelBuilder builder)
@@ -55,6 +136,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         {
             entity.Property(u => u.FullName).HasMaxLength(150).IsRequired();
             entity.Property(u => u.ProfileImageUrl).HasMaxLength(500);
+            entity.Property(u => u.PhotoUrl).HasMaxLength(500);
+            entity.Property(u => u.DigitalSignatureUrl).HasMaxLength(500);
             entity.Property(u => u.IsActive).HasDefaultValue(true);
             entity.Property(u => u.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
             entity.HasIndex(u => u.IsActive).HasDatabaseName("IX_AspNetUsers_IsActive");
@@ -74,6 +157,48 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                   .WithMany(u => u.RefreshTokens)
                   .HasForeignKey(t => t.UserId)
                   .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<PasswordResetRequest>(entity =>
+        {
+            entity.ToTable("PasswordResetRequests");
+            entity.Property(r => r.UserId).HasMaxLength(450).IsRequired();
+            entity.Property(r => r.Token).HasMaxLength(256).IsRequired();
+            entity.Property(r => r.RequestedFromIp).HasMaxLength(45);
+            entity.Property(r => r.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(r => r.Token).IsUnique().HasDatabaseName("UQ_PasswordResetRequests_Token");
+            entity.HasIndex(r => new { r.UserId, r.ExpiresAt })
+                  .HasDatabaseName("IX_PasswordResetRequests_UserId_ExpiresAt");
+
+            entity.HasOne(r => r.User)
+                  .WithMany()
+                  .HasForeignKey(r => r.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<Attendance>(entity =>
+        {
+            entity.ToTable("Attendance");
+            entity.Property(a => a.Status).HasMaxLength(20).IsRequired();
+            entity.Property(a => a.Remark).HasMaxLength(300);
+            entity.Property(a => a.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(a => new { a.StudentId, a.AttendanceDate })
+                  .IsUnique()
+                  .HasDatabaseName("UQ_Attendance_Student_Date");
+            entity.HasIndex(a => a.AttendanceDate)
+                  .HasDatabaseName("IX_Attendance_AttendanceDate");
+            entity.HasIndex(a => a.StudentId)
+                  .HasDatabaseName("IX_Attendance_StudentId");
+
+            entity.HasOne(a => a.Student)
+                  .WithMany()
+                  .HasForeignKey(a => a.StudentId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(a => a.RecordedByTeacher)
+                  .WithMany()
+                  .HasForeignKey(a => a.RecordedByTeacherId)
+                  .OnDelete(DeleteBehavior.Restrict);
         });
     }
 
@@ -151,6 +276,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(s => s.Gender).HasMaxLength(10);
             entity.Property(s => s.GuardianName).HasMaxLength(150);
             entity.Property(s => s.GuardianPhone).HasMaxLength(30);
+            entity.Property(s => s.EmergencyContact).HasMaxLength(100);
+            entity.Property(s => s.BloodGroup).HasMaxLength(10);
             entity.Property(s => s.Address).HasMaxLength(250);
             entity.Property(s => s.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
             entity.HasIndex(s => s.StudentIdNumber).IsUnique().HasDatabaseName("UQ_Students_StudentIdNumber");
@@ -176,11 +303,46 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
                   .OnDelete(DeleteBehavior.SetNull);
         });
 
+        builder.Entity<Guardian>(entity =>
+        {
+            entity.ToTable("Guardians");
+            entity.Property(g => g.UserId).HasMaxLength(450).IsRequired();
+            entity.Property(g => g.PhoneNumber).HasMaxLength(30);
+            entity.Property(g => g.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(g => g.UserId).IsUnique().HasDatabaseName("UQ_Guardians_UserId");
+
+            entity.HasOne(g => g.User)
+                  .WithOne(u => u.Guardian)
+                  .HasForeignKey<Guardian>(g => g.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<StudentGuardian>(entity =>
+        {
+            entity.ToTable("StudentGuardians");
+            entity.Property(sg => sg.Relationship).HasMaxLength(50);
+            entity.Property(sg => sg.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(sg => new { sg.GuardianId, sg.StudentId }).IsUnique().HasDatabaseName("UQ_StudentGuardians_Pair");
+            entity.HasIndex(sg => sg.GuardianId).HasDatabaseName("IX_StudentGuardians_GuardianId");
+
+            entity.HasOne(sg => sg.Student)
+                  .WithMany(s => s.StudentGuardians)
+                  .HasForeignKey(sg => sg.StudentId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(sg => sg.Guardian)
+                  .WithMany(g => g.StudentGuardians)
+                  .HasForeignKey(sg => sg.GuardianId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
         builder.Entity<StudentRegistrationRequest>(entity =>
         {
             entity.ToTable("StudentRegistrationRequests");
             entity.Property(r => r.FullName).HasMaxLength(150).IsRequired();
             entity.Property(r => r.ContactEmail).HasMaxLength(256).IsRequired();
+            entity.Property(r => r.PhotoUrl).HasMaxLength(500);
+            entity.Property(r => r.RequestedRole).HasMaxLength(20).HasDefaultValue("Student");
             entity.Property(r => r.Status).HasMaxLength(20).IsRequired();
             entity.Property(r => r.SubmittedAt).HasDefaultValueSql("SYSUTCDATETIME()");
             entity.Property(r => r.ReviewedByUserId).HasMaxLength(450);
@@ -300,6 +462,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         {
             entity.ToTable("Assessments");
             entity.Property(a => a.Title).HasMaxLength(200).IsRequired();
+            entity.Property(a => a.CustomTypeTitle).HasMaxLength(100);
             entity.Property(a => a.MaxScore).HasPrecision(6, 2);
             entity.Property(a => a.AcademicYear).HasMaxLength(9).IsRequired();
             entity.Property(a => a.IsActive).HasDefaultValue(true);
@@ -401,6 +564,106 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(s => s.Description).HasMaxLength(300);
             entity.Property(s => s.UpdatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
         });
+
+            builder.Entity<Event>(entity =>
+            {
+                  entity.ToTable("Events");
+                  entity.Property(e => e.Title).HasMaxLength(200).IsRequired();
+                  entity.Property(e => e.BannerImageUrl).HasMaxLength(500);
+                  entity.Property(e => e.Category).HasMaxLength(50).HasDefaultValue("General").IsRequired();
+                  entity.Property(e => e.Venue).HasMaxLength(200);
+                  entity.Property(e => e.Organizer).HasMaxLength(150);
+                  entity.Property(e => e.TargetRole).HasMaxLength(20).HasDefaultValue("All").IsRequired();
+                  entity.Property(e => e.TargetGradeIdsCsv).HasMaxLength(1000);
+                  entity.Property(e => e.TargetSectionIdsCsv).HasMaxLength(1000);
+                  entity.Property(e => e.StatusOverride).HasMaxLength(20);
+                  entity.Property(e => e.RegistrationDeadline).HasColumnName("RegistrationDeadline");
+                  entity.Property(e => e.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+                  entity.Property(e => e.IsDeleted).HasDefaultValue(false);
+                  entity.HasIndex(e => e.StartsAt).HasDatabaseName("IX_Events_StartDate");
+                  entity.HasIndex(e => e.Category).HasDatabaseName("IX_Events_Category");
+                  entity.HasIndex(e => e.IsPublished).HasDatabaseName("IX_Events_IsActive");
+
+                  entity.HasOne(e => e.GradeLevel).WithMany().HasForeignKey(e => e.GradeLevelId).OnDelete(DeleteBehavior.Restrict);
+                  entity.HasOne(e => e.Section).WithMany().HasForeignKey(e => e.SectionId).OnDelete(DeleteBehavior.Restrict);
+                  entity.HasOne(e => e.OrganizedByUser).WithMany().HasForeignKey(e => e.OrganizedByUserId).OnDelete(DeleteBehavior.SetNull);
+            });
+
+            builder.Entity<EventRegistration>(entity =>
+            {
+                  entity.ToTable("EventRegistrations");
+                  entity.Property(r => r.Status).HasMaxLength(20).HasDefaultValue(EventRegistrationStatuses.Confirmed).IsRequired();
+                  entity.Property(r => r.AttendanceStatus).HasMaxLength(20).HasDefaultValue(EventAttendanceStatuses.Pending).IsRequired();
+                  entity.Property(r => r.RegisteredAt).HasDefaultValueSql("SYSUTCDATETIME()");
+                  entity.HasIndex(r => new { r.EventId, r.StudentId }).IsUnique().HasDatabaseName("UQ_EventRegistrations_Event_Student");
+                  entity.HasOne(r => r.Event).WithMany(e => e.Registrations).HasForeignKey(r => r.EventId).OnDelete(DeleteBehavior.Cascade);
+                  entity.HasOne(r => r.Student).WithMany().HasForeignKey(r => r.StudentId).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            builder.Entity<Notification>(entity =>
+            {
+                  entity.ToTable("Notifications");
+                  entity.Property(n => n.UserId).HasMaxLength(450).IsRequired();
+                  entity.Property(n => n.Title).HasMaxLength(200).IsRequired();
+                  entity.Property(n => n.Message).HasMaxLength(1000).IsRequired();
+                  entity.Property(n => n.Type).HasMaxLength(30).IsRequired();
+                  entity.Property(n => n.TargetUrl).HasMaxLength(500).IsRequired();
+                  entity.Property(n => n.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+                  entity.HasIndex(n => new { n.UserId, n.ReadAt, n.CreatedAt })
+                      .HasDatabaseName("IX_Notifications_User_Read_Created");
+                  entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(n => n.UserId).OnDelete(DeleteBehavior.Cascade);
+            });
+    }
+
+    private static void ConfigureFeedbackAndComments(ModelBuilder builder)
+    {
+        builder.Entity<StudentFeedback>(entity =>
+        {
+            entity.ToTable("StudentFeedbacks");
+            entity.Property(feedback => feedback.Category).HasMaxLength(30).IsRequired();
+            entity.Property(feedback => feedback.Message).HasMaxLength(4000).IsRequired();
+            entity.Property(feedback => feedback.Status)
+                  .HasMaxLength(30)
+                  .HasDefaultValue(StudentFeedbackStatuses.PendingReview)
+                  .IsRequired();
+            entity.Property(feedback => feedback.SubmittedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(feedback => new { feedback.Status, feedback.SubmittedAt })
+                  .HasDatabaseName("IX_StudentFeedbacks_Status_SubmittedAt");
+            entity.HasOne(feedback => feedback.Student)
+                  .WithMany()
+                  .HasForeignKey(feedback => feedback.StudentId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<EventComment>(entity =>
+        {
+            entity.ToTable("EventComments");
+            entity.Property(comment => comment.UserId).HasMaxLength(450);
+            entity.Property(comment => comment.UserName).HasMaxLength(150).IsRequired();
+            entity.Property(comment => comment.UserRole).HasMaxLength(20).IsRequired();
+            entity.Property(comment => comment.CommentText).HasMaxLength(2000).IsRequired();
+            entity.Property(comment => comment.CreatedAt).HasDefaultValueSql("SYSUTCDATETIME()");
+            entity.HasIndex(comment => new { comment.EventId, comment.CreatedAt })
+                  .HasDatabaseName("IX_EventComments_Event_CreatedAt");
+            entity.HasIndex(comment => comment.ParentCommentId)
+                  .HasDatabaseName("IX_EventComments_ParentCommentId");
+            entity.HasOne(comment => comment.Event)
+                  .WithMany(calendarEvent => calendarEvent.Comments)
+                  .HasForeignKey(comment => comment.EventId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(comment => comment.User)
+                  .WithMany()
+                  .HasForeignKey(comment => comment.UserId)
+                  .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(comment => comment.ParentComment)
+                  .WithMany(parent => parent.Replies)
+                  .HasForeignKey(comment => comment.ParentCommentId)
+                  .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(comment => comment.Student)
+                  .WithMany()
+                  .HasForeignKey(comment => comment.StudentId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
     }
 
     private static void ConfigureViews(ModelBuilder builder)
@@ -409,7 +672,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         {
             entity.HasNoKey().ToView("vw_StudentSubjectPerformance");
             entity.Property(p => p.QuizScore).HasPrecision(6, 2);
-            entity.Property(p => p.AssignmentScore).HasPrecision(6, 2);
             entity.Property(p => p.TestScore).HasPrecision(6, 2);
             entity.Property(p => p.MidExamScore).HasPrecision(6, 2);
             entity.Property(p => p.FinalExamScore).HasPrecision(6, 2);

@@ -8,6 +8,8 @@ public class Assessment
 
     public AssessmentType AssessmentType { get; set; }
 
+    public string? CustomTypeTitle { get; set; }
+
     public decimal MaxScore { get; set; }
 
     public int SubjectId { get; set; }

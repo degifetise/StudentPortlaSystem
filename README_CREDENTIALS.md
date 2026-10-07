@@ -1,119 +1,63 @@
-# Development seed credentials
+# Local development configuration
 
-Every account the Halade High School Portal creates for you, where it comes from, and how to
-change it. **Development only** — see [Before deploying](#before-deploying).
+The API reads connection strings, JWT signing keys, and seed passwords from
+configuration. Keep real values in .NET user-secrets or environment variables; do
+not put them in `appsettings*.json`, `.env` files, source control, or screenshots.
 
-## Accounts
+## Configure the API
 
-| Role | Email | Password | Created by | Environments |
-| --- | --- | --- | --- | --- |
-| Admin | `admin@haladehighschool.edu` | `Admin@12345` | `DbSeeder` ← `SeedAdmin` | All |
-| Teacher | `k.abebe@haladehighschool.edu` | `Teacher@12345` | `DbSeeder` ← `SeedDemoAccounts` | Development |
-| Student | `abel.t@haladehighschool.edu` | `Student@12345` | `DbSeeder` ← `SeedDemoAccounts` | Development |
-
-All three are created on API start-up and are idempotent: an account that already exists is
-left exactly as it is, including its password.
-
-Seeded accounts sign in straight away. An application from the public registration form on the
-login screen has no account at all until it is approved: the form takes a name, an email address
-and a class, and stores that in `StudentRegistrationRequests` as `Pending`. No login and no
-`Students` row exist yet, so trying to sign in reports an incorrect email or password because
-there is genuinely nothing to sign in to.
-
-An administrator works the queue under **Accounts → Registration approvals**. Approving generates
-the student number (`HHS-{year}-{sequence}`), a school sign-in address derived from it
-(`hhs-2026-0007@haladehighschool.edu`, domain from `Provisioning:StudentEmailDomain`) and a
-temporary password, then provisions the login and the student record in one transaction. **The
-temporary password is shown once, in the panel that appears after approving** - it is stored only
-as a hash, so if it is lost the only way back is a password reset. Send it, with the sign-in
-address, to the applicant's own address. Declining provisions nothing, and the applicant is free
-to apply again.
-
-Password changes go through `POST /api/account/change-password` and every attempt, successful or
-not, is recorded in `PasswordChangeLogs` with the outcome, the reason it was refused, the caller's
-IP address and user agent.
-
-`database/seed-demo-data.ps1` optionally adds four more students
-(`bethel.g@`, `caleb.m@`, `dina.h@`, `eyob.s@haladehighschool.edu`, all `Student@12345`) plus
-the teaching assignments, assessments and published marks that make the dashboards worth
-looking at. Run it after the API is up:
+From `backend/HaladeHighSchool.Api`, set a local database connection string and
+unique secrets. User-secrets are stored outside the repository:
 
 ```powershell
-pwsh -File database/seed-demo-data.ps1
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Server=.\MSSQLSERVER01;Database=HaladeHighSchoolDb;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=True"
+dotnet user-secrets set "Jwt:Key" "<random signing key of at least 32 characters>"
+dotnet user-secrets set "SeedAdmin:Email" "<your administrator email>"
+dotnet user-secrets set "SeedAdmin:Password" "<unique administrator password>"
 ```
 
-## Where the values live
+If your SQL Server uses SQL authentication, store that full connection string with
+`dotnet user-secrets` instead of placing its username or password in an appsettings
+file. The checked-in connection string uses Windows integrated authentication.
 
-| Setting | File | Notes |
-| --- | --- | --- |
-| `SeedAdmin:Email` / `:Password` / `:FullName` | `backend/HaladeHighSchool.Api/appsettings.json` | Created in every environment |
-| `SeedDemoAccounts:Enabled` | `appsettings.Development.json` | Set `false` to skip the demo cohort |
-| `SeedDemoAccounts:Teacher:*` | `appsettings.Development.json` | Email, password, name, specialization |
-| `SeedDemoAccounts:Student:*` | `appsettings.Development.json` | Email, password, name |
+The project uses a `UserSecretsId` so the commands work without putting credentials
+in the project file. The administrator seeder does nothing until both admin email and
+password are configured. `Jwt:Key` is required when the API starts.
 
-Nothing is hard-coded in `DbSeeder.cs`; it only reads configuration. The demo student is
-placed in the lowest active grade level and the first active section, matched on `Level` and
-`Code` rather than on name, so a renamed "Grade 9" or "Section A" does not break start-up.
+## Optional development accounts
 
-## Seeing them at start-up
+Demo teacher/student seeding is disabled by default. To enable it locally, configure
+unique passwords first, then enable the section:
 
-When the host environment is Development, `DbSeeder` writes a summary table to the console:
-
-```text
-==========================================================================
- DEVELOPMENT SEED CREDENTIALS - Development environment
- ...
-  ROLE     EMAIL                              PASSWORD        STATUS
-  Admin    admin@haladehighschool.edu         ...             already existed
-  Teacher  k.abebe@haladehighschool.edu       ...             created now
-  Student  abel.t@haladehighschool.edu        ...             created now
---------------------------------------------------------------------------
+```powershell
+dotnet user-secrets set "SeedDemoAccounts:Teacher:Password" "<unique teacher password>"
+dotnet user-secrets set "SeedDemoAccounts:Student:Password" "<unique student password>"
+dotnet user-secrets set "SeedDemoAccounts:Enabled" "true"
 ```
 
-It is written at `Warning` level so it survives a raised minimum log level, and it is guarded
-by `IHostEnvironment.IsDevelopment()`, so no password is ever written to a deployed log. A
-password shown next to `already existed` is the configured value, which will be wrong if
-somebody has since changed that account's password through the portal.
+Demo accounts are only seeded when the API runs in the Development environment. Existing
+accounts are not reset by the seeder. The startup summary reports the number of accounts
+processed and does not print credentials.
 
-## When a documented password stops working
+The optional `database/seed-demo-data.ps1` script requires these environment variables in
+the current PowerShell session: `SMS_ADMIN_EMAIL`, `SMS_ADMIN_PASSWORD`,
+`SMS_DEMO_TEACHER_PASSWORD`, and `SMS_DEMO_STUDENT_PASSWORD`. It creates demo records
+through the API; do not run it against a live school database.
 
-The seeder never touches an account that already exists, so if somebody changes a password
-through the portal — including with **Reset password** on the Admin Console, which issues a
-random one — the table above is out of date for that account and the seeder cannot know it.
+## Account lifecycle
 
-Two ways back:
+Public registration submissions remain pending until an administrator approves them.
+Approval provisions the login and student record together and shows a one-time temporary
+password. The password is stored as a hash and cannot be retrieved later; reset it from
+the Admin Console if it is lost. Password changes and reset operations should be completed
+through the portal rather than by editing database records.
 
-- **Reset it again** from the Admin Console. The temporary password is shown once, on screen,
-  and never returned by the API a second time.
-- **Let the seeder rebuild it.** Delete the account from the Admin Console and restart the API;
-  it is recreated with the configured password. Deletion is refused for anybody carrying marks
-  or teaching history, so this only works for an account with no record attached to it.
+For an existing database, apply the appropriate schema scripts in `database/` in order.
+The project supports Nursery, KG, LKG, UKG, Grades 1-12, and Sections A-F.
 
-> As of the last run, `abel.t@haladehighschool.edu` no longer accepts `Student@12345` — its
-> password was changed inside the portal. The other demo students seeded by
-> `seed-demo-data.ps1` still use `Student@12345`.
+## Previously exposed values
 
-## Two safeguards
-
-1. `DbSeeder` skips the demo cohort unless `IHostEnvironment.IsDevelopment()`.
-2. `SeedDemoAccounts` exists only in `appsettings.Development.json`, so even a mis-set
-   `ASPNETCORE_ENVIRONMENT` finds no section to act on.
-
-The administrator is deliberately not behind that guard: every environment needs one account
-to bootstrap from.
-
-## Before deploying
-
-1. Move the administrator password out of `appsettings.json`:
-
-```bash
-dotnet user-secrets set "SeedAdmin:Password" "<strong-password>"
-# or
-setx SeedAdmin__Password "<strong-password>"
-```
-
-2. Sign in as the administrator and change the password through the portal, then confirm
-   `GET /api/system-settings` still works with the new one.
-3. Replace `Jwt:Key` in `appsettings.json` with a 32-byte-plus secret from a secret store.
-4. Check the start-up log for the credential table. If you can see it, the app is running in
-   Development and should not be serving real users.
+Older repository history contained development seed passwords and a JWT signing key.
+Treat any values that were used as compromised: rotate them and invalidate any affected
+tokens. This sanitized snapshot must be pushed without the earlier Git history so those
+values are not reintroduced.

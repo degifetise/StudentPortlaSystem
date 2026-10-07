@@ -94,11 +94,8 @@ public class TokenService : ITokenService
     }
 
     /// <summary>
-    /// The roles, the student record and the teacher record in one round trip.
-    ///
-    /// A user is a student or a teacher or neither, and both sides are one-to-one with the
-    /// account, so this is a pair of outer joins rather than three separate lookups. Sign-in and
-    /// token refresh are the only callers, and both were paying for all three.
+    /// The roles, student record, teacher record, and guardian links for a user.
+    /// The related collections are split into separate queries to avoid a cartesian product.
     /// </summary>
     public async Task<UserProfileResponse> BuildProfileAsync(
         ApplicationUser user,
@@ -106,6 +103,7 @@ public class TokenService : ITokenService
     {
         var profile = await _db.Users
             .AsNoTracking()
+            .AsSplitQuery()
             .Where(u => u.Id == user.Id)
             .Select(u => new
             {
@@ -121,7 +119,11 @@ public class TokenService : ITokenService
                 SectionName = u.Student!.Section!.Name,
                 TeacherId = (int?)u.Teacher!.Id,
                 u.Teacher!.EmployeeId,
-                u.Teacher!.Specialization
+                u.Teacher!.Specialization,
+                GuardianId = (int?)u.Guardian!.Id,
+                LinkedStudentIds = u.Guardian != null
+                    ? u.Guardian.StudentGuardians.Select(sg => sg.StudentId).ToList()
+                    : new List<int>()
             })
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -140,7 +142,9 @@ public class TokenService : ITokenService
             SectionName = profile?.SectionName,
             TeacherId = profile?.TeacherId,
             EmployeeId = profile?.EmployeeId,
-            Specialization = profile?.Specialization
+            Specialization = profile?.Specialization,
+            GuardianId = profile?.GuardianId,
+            LinkedStudentIds = profile?.LinkedStudentIds ?? []
         };
     }
 
@@ -170,6 +174,11 @@ public class TokenService : ITokenService
         if (profile.TeacherId is int teacherId)
         {
             claims.Add(new Claim(PortalClaims.TeacherId, teacherId.ToString()));
+        }
+
+        if (profile.GuardianId is int guardianId)
+        {
+            claims.Add(new Claim(PortalClaims.GuardianId, guardianId.ToString()));
         }
 
         var key = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(_jwt.Key));

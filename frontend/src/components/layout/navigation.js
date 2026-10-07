@@ -1,12 +1,20 @@
 import {
   CalendarDays,
+  ClipboardList,
   ClipboardCheck,
   GraduationCap,
   Home,
   Info,
   LogIn,
+  NotebookPen,
   Settings,
   Users,
+  BookOpen,
+  BarChart3,
+  MessageSquareText,
+  UsersRound,
+  IdCard,
+  ScanLine,
 } from 'lucide-react';
 import { ROLES } from '../../context/AuthContext';
 
@@ -19,9 +27,11 @@ import { ROLES } from '../../context/AuthContext';
  *
  * The per-role result:
  *   Guest    Home · About · Explore Events · Login
- *   Student  Home · My Academic Results · Settings          (deliberately minimal)
+ *   Student  Home · My Academic Results · Feedback · Settings
  *   Teacher  Home · About · Explore Events · Students · Settings
- *   Admin    Home · About · Explore Events · Students · Accounts · Settings
+ *   Staff    Home · ID Scanner · Settings
+ *   Admin    Home · About · Explore Events · Students · Attendance · Accounts · Parents · Settings
+ *   Guardian My Children · Settings
  *
  * Logout is not in this list. It is an account action, not a destination, so the bar renders it
  * separately from the links.
@@ -44,7 +54,7 @@ const NAV_ITEMS = [
   },
   {
     to: '/events',
-    label: 'Explore Events',
+    label: 'Events',
     icon: CalendarDays,
     roles: [ROLES.admin, ROLES.teacher],
     guest: true,
@@ -58,11 +68,32 @@ const NAV_ITEMS = [
     roles: [ROLES.student],
   },
   {
+    to: '/student/feedback',
+    label: 'Feedback & Ideas',
+    icon: MessageSquareText,
+    description: 'Share and track feedback with school administrators',
+    roles: [ROLES.student],
+  },
+  {
     to: '/teacher/students',
     label: 'Students',
     icon: Users,
     description: 'Your class rosters and their grades',
-    roles: [ROLES.teacher],
+    roles: [ROLES.teacher, ROLES.staff],
+  },
+  {
+    to: '/my-smart-id',
+    label: 'My Smart ID',
+    icon: IdCard,
+    description: 'View your digital ID and live verification QR',
+    roles: [ROLES.admin, ROLES.teacher, ROLES.student],
+  },
+  {
+    to: '/admin/analytics',
+    label: 'Analytics',
+    icon: BarChart3,
+    description: 'School enrolment and published grade performance',
+    roles: [ROLES.admin],
   },
   {
     to: '/admin/students',
@@ -72,10 +103,87 @@ const NAV_ITEMS = [
     roles: [ROLES.admin],
   },
   {
+    to: '/teacher/analytics',
+    label: 'Analytics',
+    icon: BarChart3,
+    description: 'Pass and fail rates for your assigned classes',
+    roles: [ROLES.teacher],
+  },
+  {
     to: '/admin/accounts',
     label: 'Accounts',
     icon: ClipboardCheck,
     description: 'Registration approvals and account provisioning',
+    roles: [ROLES.admin],
+  },
+  {
+    to: '/admin/smart-id/print',
+    label: 'Smart IDs',
+    icon: IdCard,
+    description: 'Issue, preview and print student and staff ID cards',
+    roles: [ROLES.admin],
+  },
+  {
+    to: '/admin/scanner',
+    label: 'ID Scanner',
+    icon: ScanLine,
+    description: 'Verify Smart ID cards at the gate',
+    roles: [ROLES.admin],
+  },
+  {
+    to: '/staff/scanner',
+    label: 'ID Scanner',
+    icon: ScanLine,
+    description: 'Verify Smart ID cards at the gate',
+    roles: [ROLES.teacher, ROLES.staff],
+  },
+  {
+    to: '/admin/parents',
+    label: 'Parents',
+    icon: UsersRound,
+    description: 'Register guardian accounts and link students',
+    roles: [ROLES.admin],
+  },
+  {
+    to: '/parent/dashboard',
+    label: 'My Children',
+    icon: UsersRound,
+    description: 'View linked students, attendance and results',
+    roles: [ROLES.guardian],
+  },
+  {
+    to: '/admin/attendance',
+    label: 'Attendance',
+    icon: ClipboardList,
+    description: 'System-wide attendance summaries',
+    roles: [ROLES.admin],
+  },
+  {
+    to: '/admin/subjects',
+    label: 'Subjects',
+    icon: BookOpen,
+    description: 'Create and update the academic catalog',
+    roles: [ROLES.admin],
+  },
+  {
+    to: '/admin/assessments',
+    label: 'Assessments',
+    icon: ClipboardCheck,
+    description: 'Create subject assessments and custom types',
+    roles: [ROLES.admin],
+  },
+  {
+    to: '/admin/assignments',
+    label: 'Assignments',
+    icon: NotebookPen,
+    description: 'Assign teachers to subjects and sections',
+    roles: [ROLES.admin],
+  },
+  {
+    to: '/admin/feedback',
+    label: 'Feedback',
+    icon: MessageSquareText,
+    description: 'Review and respond to student feedback',
     roles: [ROLES.admin],
   },
   {
@@ -92,6 +200,13 @@ const NAV_ITEMS = [
     // Signed-out only: an authenticated visitor gets the profile menu instead.
     roles: [],
     guest: true,
+  },
+  {
+    to: '/teacher/attendance',
+    label: 'Attendance',
+    icon: ClipboardList,
+    description: 'Mark daily attendance for your classes',
+    roles: [ROLES.teacher],
   },
 ];
 

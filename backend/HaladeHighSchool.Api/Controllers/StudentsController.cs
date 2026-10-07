@@ -25,17 +25,20 @@ public class StudentsController : PortalControllerBase
     private readonly ApplicationDbContext _db;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly IAccountProvisioningService _provisioning;
+    private readonly IProfilePhotoStorage _photoStorage;
     private readonly ILogger<StudentsController> _logger;
 
     public StudentsController(
         ApplicationDbContext db,
         UserManager<ApplicationUser> userManager,
         IAccountProvisioningService provisioning,
+        IProfilePhotoStorage photoStorage,
         ILogger<StudentsController> logger)
     {
         _db = db;
         _userManager = userManager;
         _provisioning = provisioning;
+        _photoStorage = photoStorage;
         _logger = logger;
     }
 
@@ -136,27 +139,70 @@ public class StudentsController : PortalControllerBase
     [HttpPost]
     [ProducesResponseType<CreateStudentResponse>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<CreateStudentResponse>> CreateStudent(
+    public Task<ActionResult<CreateStudentResponse>> CreateStudent(
         CreateStudentRequest request,
+        CancellationToken cancellationToken) =>
+        CreateStudentCore(request, null, cancellationToken);
+
+    [HttpPost("with-photo")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit((2 * 1024 * 1024) + (64 * 1024))]
+    [ProducesResponseType<CreateStudentResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public Task<ActionResult<CreateStudentResponse>> CreateStudentWithPhoto(
+        [FromForm] CreateStudentRequest request,
+        CancellationToken cancellationToken) =>
+        CreateStudentCore(request, request.Photo, cancellationToken);
+
+    private async Task<ActionResult<CreateStudentResponse>> CreateStudentCore(
+        CreateStudentRequest request,
+        IFormFile? photo,
         CancellationToken cancellationToken)
     {
-        var result = await _provisioning.CreateStudentAsync(new ProvisionStudentRequest
+        string? photoUrl = null;
+        try
         {
-            Email = request.Email,
-            Password = request.Password,
-            FullName = request.FullName,
-            GradeLevelId = request.GradeLevelId,
-            SectionId = request.SectionId,
-            StudentIdNumber = request.StudentIdNumber,
-            DateOfBirth = request.DateOfBirth,
-            Gender = request.Gender,
-            GuardianName = request.GuardianName,
-            GuardianPhone = request.GuardianPhone,
-            Address = request.Address
-        }, cancellationToken);
+            if (photo is not null)
+            {
+                photoUrl = await _photoStorage.SaveAsync(photo, cancellationToken);
+            }
+        }
+        catch (InvalidProfilePhotoException ex)
+        {
+            return BadRequest(new ProblemDetails
+            {
+                Title = "Invalid profile photo",
+                Detail = ex.Message,
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+
+        ProvisionResult<Student> result;
+        try
+        {
+            result = await _provisioning.CreateStudentAsync(new ProvisionStudentRequest
+            {
+                Password = request.Password,
+                FullName = request.FullName,
+                GradeLevelId = request.GradeLevelId,
+                SectionId = request.SectionId,
+                DateOfBirth = request.DateOfBirth,
+                Gender = request.Gender,
+                GuardianName = request.GuardianName,
+                GuardianPhone = request.GuardianPhone,
+                Address = request.Address,
+                PhotoUrl = photoUrl,
+            }, cancellationToken);
+        }
+        catch
+        {
+            await _photoStorage.DeleteAsync(photoUrl);
+            throw;
+        }
 
         if (!result.Succeeded || result.Entity is null)
         {
+            await _photoStorage.DeleteAsync(photoUrl);
             return BadRequest(new ValidationProblemDetails
             {
                 Title = "Student not created",
@@ -443,6 +489,126 @@ public class StudentsController : PortalControllerBase
             .ToListAsync(cancellationToken);
 
         return Ok(summary);
+    }
+
+    /// <summary>
+    /// Advances every active student to the next grade level for the new academic year, then
+    /// updates the stored academic-year setting only after the admin explicitly confirms it.
+    /// </summary>
+    [HttpPost("academic-year-rollover")]
+    [ProducesResponseType<AcademicYearRolloverResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<AcademicYearRolloverResponse>> AcademicYearRollover(
+        AcademicYearRolloverRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!request.Confirm)
+        {
+            return BadRequestProblem(
+                "Confirmation required",
+                "Set Confirm to true before advancing students and changing the academic year.");
+        }
+
+        var currentAcademicYear = await _db.SystemSettings
+            .AsNoTracking()
+            .Where(s => s.Key == "AcademicYear")
+            .Select(s => s.Value)
+            .FirstOrDefaultAsync(cancellationToken) ?? "2026-2027";
+
+        if (string.IsNullOrWhiteSpace(request.NewAcademicYear) ||
+            request.NewAcademicYear.Length != 9 ||
+            !int.TryParse(request.NewAcademicYear[..4], out var start) ||
+            !int.TryParse(request.NewAcademicYear[5..], out var end) ||
+            end != start + 1)
+        {
+            return BadRequestProblem("Invalid academic year", "AcademicYear must look like '2026-2027'.");
+        }
+
+        var students = await _db.Students
+            .Include(s => s.GradeLevel)
+            .Where(s => s.IsActive)
+            .OrderBy(s => s.Id)
+            .ToListAsync(cancellationToken);
+
+        var nextGradeMap = await _db.GradeLevels
+            .AsNoTracking()
+            .Where(g => g.IsActive)
+            .ToDictionaryAsync(g => g.Level, g => g.Id, cancellationToken);
+
+        var promotedCount = 0;
+        var skippedCount = 0;
+
+        foreach (var student in students)
+        {
+            var currentLevel = await _db.GradeLevels
+                .AsNoTracking()
+                .Where(g => g.Id == student.GradeLevelId)
+                .Select(g => (int?)g.Level)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (currentLevel is null)
+            {
+                skippedCount++;
+                continue;
+            }
+
+            var nextLevel = currentLevel.Value + 1;
+            if (!nextGradeMap.TryGetValue(nextLevel, out var nextGradeId))
+            {
+                skippedCount++;
+                continue;
+            }
+
+            student.GradeLevelId = nextGradeId;
+            promotedCount++;
+        }
+
+        if (promotedCount > 0)
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
+        var academicYearRow = await _db.SystemSettings
+            .FirstOrDefaultAsync(s => s.Key == "AcademicYear", cancellationToken);
+
+        if (academicYearRow is null)
+        {
+            _db.SystemSettings.Add(new HaladeHighSchool.Api.Models.SystemSetting
+            {
+                Key = "AcademicYear",
+                Value = request.NewAcademicYear,
+                Description = "Active academic year",
+                UpdatedAt = DateTime.UtcNow
+            });
+        }
+        else
+        {
+            academicYearRow.Value = request.NewAcademicYear;
+            academicYearRow.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        var response = new AcademicYearRolloverResponse
+        {
+            FromAcademicYear = currentAcademicYear,
+            ToAcademicYear = request.NewAcademicYear,
+            Confirmed = true,
+            StudentsSeen = students.Count,
+            PromotedCount = promotedCount,
+            SkippedCount = skippedCount,
+            UpdatedAcademicYear = 1
+        };
+
+        _logger.LogInformation(
+            "Admin {Admin} completed academic-year rollover: {From} -> {To}; promoted {Promoted}, skipped {Skipped}",
+            User.GetUserId(),
+            currentAcademicYear,
+            request.NewAcademicYear,
+            promotedCount,
+            skippedCount);
+
+        return Ok(response);
     }
 
     /// <summary>Re-reads one student through the shared detail projection.</summary>

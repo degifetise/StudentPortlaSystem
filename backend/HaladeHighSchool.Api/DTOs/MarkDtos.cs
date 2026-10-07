@@ -104,6 +104,7 @@ public record GradebookResponse
     public int AssessmentId { get; init; }
     public string AssessmentTitle { get; init; } = string.Empty;
     public AssessmentType AssessmentType { get; init; }
+    public string? CustomTypeTitle { get; init; }
     public decimal MaxScore { get; init; }
     public decimal WeightPercentage { get; init; }
     public int SubjectId { get; init; }
@@ -127,8 +128,9 @@ public record SubjectReportCard
     public decimal? MidExamScore { get; init; }
     public decimal? FinalExamScore { get; init; }
     public decimal TotalScore { get; init; }
-    public string LetterGrade { get; init; } = string.Empty;
-    public bool IsPass { get; init; }
+    public bool IsPassed { get; init; }
+    public bool IsPass => IsPassed;
+    public string Status { get; init; } = "Fail";
 }
 
 public record ReportCardResponse
@@ -155,7 +157,7 @@ public record ResultsSummary
     /// <summary>Mean of the weighted subject totals. Null before anything is published.</summary>
     public decimal? WeightedAverage { get; init; }
 
-    /// <summary>Published components across all subjects, out of five per subject.</summary>
+    /// <summary>Published components across all subjects, out of four per subject.</summary>
     public int ComponentsMarked { get; init; }
 
     public string? StrongestSubject { get; init; }
@@ -183,6 +185,40 @@ public record MyResultsResponse
     public List<SubjectReportCard> Subjects { get; init; } = [];
     public ResultsSummary Summary { get; init; } = new();
     public IReadOnlyList<AssessmentTypeWeightResponse> GradingWeights { get; init; } = [];
+}
+
+/// <summary>One published subject result on a student's transcript.</summary>
+public record TranscriptSubjectResult
+{
+    public string AcademicYear { get; init; } = string.Empty;
+    public string GradeLevelName { get; init; } = string.Empty;
+    public int GradeLevel { get; init; }
+    public int SubjectId { get; init; }
+    public string SubjectName { get; init; } = string.Empty;
+    public string SubjectCode { get; init; } = string.Empty;
+    public int CreditHours { get; init; }
+    public decimal TotalScore { get; init; }
+    public bool IsPassed { get; init; }
+    public string Status { get; init; } = "Fail";
+}
+
+public record TranscriptTermSummary
+{
+    public string AcademicYear { get; init; } = string.Empty;
+    public int GradeLevel { get; init; }
+        public decimal? GPA { get; init; }
+    public int CreditHours { get; init; }
+    public List<TranscriptSubjectResult> Subjects { get; init; } = [];
+}
+
+public record TranscriptResponse
+{
+    public int StudentId { get; init; }
+    public string StudentIdNumber { get; init; } = string.Empty;
+    public string StudentName { get; init; } = string.Empty;
+        public decimal? CumulativeGPA { get; init; }
+    public int TotalCreditHours { get; init; }
+    public List<TranscriptTermSummary> Terms { get; init; } = [];
 }
 
 public record BulkMarkResponse

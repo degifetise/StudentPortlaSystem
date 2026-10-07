@@ -117,16 +117,20 @@ public class HealthController : PortalControllerBase
         {
             var weights = await _db.AssessmentTypeWeights
                 .AsNoTracking()
-                .Select(w => w.WeightPercentage)
+                .Select(w => new { w.WeightPercentage, w.IsActive })
                 .ToListAsync(cancellationToken);
 
             var settingsCount = await _db.SystemSettings.AsNoTracking().CountAsync(cancellationToken);
-            var total = weights.Sum();
+            var total = weights.Where(w => w.IsActive).Sum(w => w.WeightPercentage);
 
             bool viewAvailable;
             try
             {
-                await _db.StudentSubjectPerformances.AsNoTracking().Take(1).ToListAsync(cancellationToken);
+                await _db.StudentSubjectPerformances.AsNoTracking()
+                    .OrderBy(performance => performance.StudentId)
+                    .ThenBy(performance => performance.SubjectId)
+                    .Take(1)
+                    .ToListAsync(cancellationToken);
                 viewAvailable = true;
             }
             catch (Exception ex)

@@ -5,7 +5,9 @@ import { onSessionExpired, tokenStore } from '../services/api';
 export const ROLES = {
   admin: 'Admin',
   teacher: 'Teacher',
+  staff: 'Staff',
   student: 'Student',
+  guardian: 'Guardian',
 };
 
 const AuthContext = createContext(null);
@@ -155,6 +157,7 @@ export function AuthProvider({ children }) {
       hasRole: (...wanted) => wanted.flat().some((role) => roles.includes(role)),
       isAdmin: roles.includes(ROLES.admin),
       isTeacher: roles.includes(ROLES.teacher),
+      isStaff: roles.includes(ROLES.staff),
       isStudent: roles.includes(ROLES.student),
       login,
       logout,
@@ -176,6 +179,8 @@ export function useAuth() {
 export function homeRouteFor(roles = []) {
   if (roles.includes(ROLES.admin)) return '/admin/students';
   if (roles.includes(ROLES.teacher)) return '/teacher/students';
+  if (roles.includes(ROLES.staff)) return '/staff/scanner';
   if (roles.includes(ROLES.student)) return '/student/results';
+  if (roles.includes(ROLES.guardian)) return '/parent/dashboard';
   return '/login';
 }

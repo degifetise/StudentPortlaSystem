@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace HaladeHighSchool.Api.DTOs;
 
@@ -41,9 +42,6 @@ public record StudentDetailResponse : StudentListItem
 
 public record CreateStudentRequest
 {
-    [Required, EmailAddress, MaxLength(256)]
-    public string Email { get; init; } = string.Empty;
-
     /// <summary>Optional. A temporary password is generated when omitted.</summary>
     [MinLength(8), MaxLength(100)]
     public string? Password { get; init; }
@@ -56,9 +54,6 @@ public record CreateStudentRequest
 
     [Required]
     public int SectionId { get; init; }
-
-    [MaxLength(30)]
-    public string? StudentIdNumber { get; init; }
 
     public DateOnly? DateOfBirth { get; init; }
 
@@ -73,6 +68,9 @@ public record CreateStudentRequest
 
     [MaxLength(250)]
     public string? Address { get; init; }
+
+    [JsonIgnore]
+    public IFormFile? Photo { get; init; }
 }
 
 public record CreateStudentResponse
@@ -119,6 +117,48 @@ public record AssignClassRequest
 public record SetActiveRequest
 {
     public bool IsActive { get; init; }
+}
+
+public record AcademicYearRolloverRequest : IValidatableObject
+{
+    [Required]
+    [RegularExpression("^[0-9]{4}-[0-9]{4}$", ErrorMessage = "AcademicYear must look like '2026-2027'.")]
+    public string NewAcademicYear { get; init; } = string.Empty;
+
+    public bool Confirm { get; init; }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (string.IsNullOrWhiteSpace(NewAcademicYear))
+        {
+            yield break;
+        }
+
+        if (NewAcademicYear.Length != 9 ||
+            !int.TryParse(NewAcademicYear[..4], out var start) ||
+            !int.TryParse(NewAcademicYear[5..], out var end))
+        {
+            yield break;
+        }
+
+        if (end != start + 1)
+        {
+            yield return new ValidationResult(
+                $"AcademicYear must span two consecutive years, so '{start}-{start + 1}' rather than '{NewAcademicYear}'.",
+                [nameof(NewAcademicYear)]);
+        }
+    }
+}
+
+public record AcademicYearRolloverResponse
+{
+    public string FromAcademicYear { get; init; } = string.Empty;
+    public string ToAcademicYear { get; init; } = string.Empty;
+    public bool Confirmed { get; init; }
+    public int StudentsSeen { get; init; }
+    public int PromotedCount { get; init; }
+    public int SkippedCount { get; init; }
+    public int UpdatedAcademicYear { get; init; }
 }
 
 public record ResetPasswordResponse

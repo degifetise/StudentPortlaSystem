@@ -1,8 +1,11 @@
 using HaladeHighSchool.Api.Data;
 using HaladeHighSchool.Api.DTOs;
 using HaladeHighSchool.Api.Models;
+using HaladeHighSchool.Api.Configuration;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using System.Data;
 
 namespace HaladeHighSchool.Api.Services;
 
@@ -59,7 +62,8 @@ public interface IRegistrationRequestService
         int requestId,
         string? note,
         string reviewerUserId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool studentOnly = false);
 
     /// <summary>Turns an application down. Nothing is provisioned.</summary>
     Task<RegistrationResult<RegistrationRequestResponse>> RejectAsync(
@@ -74,18 +78,24 @@ public class RegistrationRequestService : IRegistrationRequestService
     private readonly ApplicationDbContext _db;
     private readonly IAccountProvisioningService _provisioning;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly IEmailSender _emailSender;
     private readonly ILogger<RegistrationRequestService> _logger;
+    private readonly IProfilePhotoStorage _photoStorage;
 
     public RegistrationRequestService(
         ApplicationDbContext db,
         IAccountProvisioningService provisioning,
         UserManager<ApplicationUser> userManager,
-        ILogger<RegistrationRequestService> logger)
+        IEmailSender emailSender,
+        ILogger<RegistrationRequestService> logger,
+        IProfilePhotoStorage photoStorage)
     {
         _db = db;
         _provisioning = provisioning;
         _userManager = userManager;
+        _emailSender = emailSender;
         _logger = logger;
+        _photoStorage = photoStorage;
     }
 
     public async Task<RegistrationResult<StudentRegistrationRequest>> SubmitAsync(
@@ -93,29 +103,43 @@ public class RegistrationRequestService : IRegistrationRequestService
         CancellationToken cancellationToken = default)
     {
         var contactEmail = request.Email.Trim();
+        var requestedRole = request.RequestedRole;
+        GradeLevel? gradeLevel = null;
+        Section? section = null;
 
-        var gradeLevel = await _db.GradeLevels
-            .AsNoTracking()
-            .FirstOrDefaultAsync(g => g.Id == request.GradeLevelId, cancellationToken);
-
-        if (gradeLevel is null || !gradeLevel.IsActive)
+        if (requestedRole == "Student")
         {
-            return RegistrationResult<StudentRegistrationRequest>.Fail(
-                RegistrationFailure.Invalid,
-                "Unknown grade",
-                "That grade level does not exist or is not taking students.");
-        }
+            if (request.GradeLevelId is not int gradeLevelId || request.SectionId is not int sectionId)
+            {
+                return RegistrationResult<StudentRegistrationRequest>.Fail(
+                    RegistrationFailure.Invalid,
+                    "Class required",
+                    "Students must choose a grade and section.");
+            }
 
-        var section = await _db.Sections
-            .AsNoTracking()
-            .FirstOrDefaultAsync(s => s.Id == request.SectionId, cancellationToken);
+            gradeLevel = await _db.GradeLevels
+                .AsNoTracking()
+                .FirstOrDefaultAsync(g => g.Id == gradeLevelId, cancellationToken);
 
-        if (section is null || !section.IsActive)
-        {
-            return RegistrationResult<StudentRegistrationRequest>.Fail(
-                RegistrationFailure.Invalid,
-                "Unknown section",
-                "That section does not exist or is not taking students.");
+            if (gradeLevel is null || !gradeLevel.IsActive)
+            {
+                return RegistrationResult<StudentRegistrationRequest>.Fail(
+                    RegistrationFailure.Invalid,
+                    "Unknown grade",
+                    "That grade level does not exist or is not taking students.");
+            }
+
+            section = await _db.Sections
+                .AsNoTracking()
+                .FirstOrDefaultAsync(s => s.Id == sectionId, cancellationToken);
+
+            if (section is null || !section.IsActive)
+            {
+                return RegistrationResult<StudentRegistrationRequest>.Fail(
+                    RegistrationFailure.Invalid,
+                    "Unknown section",
+                    "That section does not exist or is not taking students.");
+            }
         }
 
         // A second application while one is outstanding is a duplicate, not a new applicant.
@@ -141,24 +165,49 @@ public class RegistrationRequestService : IRegistrationRequestService
                 "A registration for this email address is already waiting to be reviewed.");
         }
 
+        string? photoUrl = null;
+        if (request.Photo is not null)
+        {
+            photoUrl = await _photoStorage.SaveAsync(request.Photo, cancellationToken);
+        }
+
         var entity = new StudentRegistrationRequest
         {
             FullName = request.FullName.Trim(),
             ContactEmail = contactEmail,
+            PhotoUrl = photoUrl,
+            RequestedRole = requestedRole,
             GradeLevelId = request.GradeLevelId,
             SectionId = request.SectionId,
             Status = RegistrationRequestStatus.Pending,
             SubmittedAt = DateTime.UtcNow,
         };
 
+        var admins = requestedRole == Roles.Student
+            ? (await _userManager.GetUsersInRoleAsync(Roles.Admin)).ToList()
+            : [];
+
         _db.StudentRegistrationRequests.Add(entity);
+        foreach (var admin in admins)
+        {
+            _db.Notifications.Add(new Notification
+            {
+                UserId = admin.Id,
+                Title = "Student registration pending review",
+                Message = $"New student registration pending review for {entity.FullName}",
+                Type = "Registration",
+                TargetUrl = "/admin/accounts",
+                CreatedAt = DateTime.UtcNow,
+            });
+        }
 
         try
         {
             await _db.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException ex)
+        catch (DbUpdateException ex) when (ex.GetBaseException() is SqlException { Number: 2601 or 2627 })
         {
+            await _photoStorage.DeleteAsync(photoUrl);
             // The filtered unique index is the real guard; two simultaneous submissions land here.
             _logger.LogWarning(ex, "Duplicate registration request for {ContactEmail}", contactEmail);
             return RegistrationResult<StudentRegistrationRequest>.Fail(
@@ -166,15 +215,19 @@ public class RegistrationRequestService : IRegistrationRequestService
                 "Already applied",
                 "A registration for this email address is already waiting to be reviewed.");
         }
+        catch
+        {
+            await _photoStorage.DeleteAsync(photoUrl);
+            throw;
+        }
 
         entity.GradeLevel = gradeLevel;
         entity.Section = section;
 
         _logger.LogInformation(
-            "Registration request {RequestId} submitted for {GradeLevel} {Section}",
+            "Registration request {RequestId} submitted as {RequestedRole}",
             entity.Id,
-            gradeLevel.Name,
-            section.Name);
+            requestedRole);
 
         return RegistrationResult<StudentRegistrationRequest>.Ok(entity);
     }
@@ -192,11 +245,12 @@ public class RegistrationRequestService : IRegistrationRequestService
                 r.Id,
                 r.FullName,
                 r.ContactEmail,
+                r.RequestedRole,
                 r.GradeLevelId,
-                GradeLevelName = r.GradeLevel!.Name,
+                GradeLevelName = r.GradeLevel != null ? r.GradeLevel.Name : null,
                 r.SectionId,
-                SectionName = r.Section!.Name,
-                r.Section!.Capacity,
+                SectionName = r.Section != null ? r.Section.Name : null,
+                SectionCapacity = r.Section != null ? r.Section.Capacity : 0,
                 r.Status,
                 r.SubmittedAt,
                 r.ReviewedAt,
@@ -227,13 +281,14 @@ public class RegistrationRequestService : IRegistrationRequestService
                 Id = r.Id,
                 FullName = r.FullName,
                 ContactEmail = r.ContactEmail,
+                RequestedRole = r.RequestedRole,
                 GradeLevelId = r.GradeLevelId,
                 GradeLevelName = r.GradeLevelName,
                 SectionId = r.SectionId,
                 SectionName = r.SectionName,
                 Status = r.Status,
                 SubmittedAt = r.SubmittedAt,
-                SectionCapacity = r.Capacity,
+                SectionCapacity = r.SectionCapacity,
                 SectionOccupancy = r.Occupancy,
                 ReviewedAt = r.ReviewedAt,
                 ReviewedByName = r.ReviewedByUserId is not null && reviewers.TryGetValue(r.ReviewedByUserId, out var name)
@@ -251,7 +306,21 @@ public class RegistrationRequestService : IRegistrationRequestService
         int requestId,
         string? note,
         string reviewerUserId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool studentOnly = false)
+    {
+        return await WithRequestLockAsync(
+            requestId,
+            token => ApproveUnderLockAsync(requestId, note, reviewerUserId, token, studentOnly),
+            cancellationToken);
+    }
+
+    private async Task<RegistrationResult<ApprovedRegistrationResponse>> ApproveUnderLockAsync(
+        int requestId,
+        string? note,
+        string reviewerUserId,
+        CancellationToken cancellationToken,
+        bool studentOnly)
     {
         var request = await _db.StudentRegistrationRequests
             .Include(r => r.GradeLevel)
@@ -266,6 +335,14 @@ public class RegistrationRequestService : IRegistrationRequestService
                 $"No registration request with id {requestId} exists.");
         }
 
+        if (studentOnly && request.RequestedRole != Roles.Student)
+        {
+            return RegistrationResult<ApprovedRegistrationResponse>.Fail(
+                RegistrationFailure.Invalid,
+                "Not a student application",
+                "This approval endpoint only accepts student applications.");
+        }
+
         if (request.Status != RegistrationRequestStatus.Pending)
         {
             return RegistrationResult<ApprovedRegistrationResponse>.Fail(
@@ -274,13 +351,25 @@ public class RegistrationRequestService : IRegistrationRequestService
                 $"This request was already {request.Status.ToLowerInvariant()}.");
         }
 
+        var isTeacher = request.RequestedRole == "Teacher";
+        if (!isTeacher && (request.GradeLevelId is null || request.SectionId is null
+            || request.Section is null || request.GradeLevel is null))
+        {
+            return RegistrationResult<ApprovedRegistrationResponse>.Fail(
+                RegistrationFailure.Invalid,
+                "Incomplete student application",
+                "A student application must include a grade and section.");
+        }
+
         /* Checked before provisioning as well as inside it: the class may have filled up while
            the application sat in the queue, and a clear message beats a provisioning failure. */
-        var occupancy = await _db.Students.CountAsync(
-            s => s.SectionId == request.SectionId && s.GradeLevelId == request.GradeLevelId && s.IsActive,
-            cancellationToken);
+        var occupancy = isTeacher
+            ? 0
+            : await _db.Students.CountAsync(
+                s => s.SectionId == request.SectionId && s.GradeLevelId == request.GradeLevelId && s.IsActive,
+                cancellationToken);
 
-        if (occupancy >= request.Section!.Capacity)
+        if (!isTeacher && occupancy >= request.Section!.Capacity)
         {
             return RegistrationResult<ApprovedRegistrationResponse>.Fail(
                 RegistrationFailure.Conflict,
@@ -289,64 +378,130 @@ public class RegistrationRequestService : IRegistrationRequestService
               + $"({occupancy}/{request.Section.Capacity}). Free a seat or move the applicant first.");
         }
 
-        /* Email and password are both left to the provisioning service: it generates the student
-           number, derives the school address from it and produces a password that satisfies the
-           configured Identity policy, all in one transaction. */
-        var provisioned = await _provisioning.CreateStudentAsync(
-            new ProvisionStudentRequest
-            {
-                FullName = request.FullName,
-                GradeLevelId = request.GradeLevelId,
-                SectionId = request.SectionId,
-            },
-            cancellationToken);
+        /* Only this authenticated approval path creates an account. */
+        var studentProvisioned = isTeacher
+            ? null
+            : await _provisioning.CreateStudentAsync(
+                new ProvisionStudentRequest
+                {
+                    FullName = request.FullName,
+                    GradeLevelId = request.GradeLevelId!.Value,
+                    SectionId = request.SectionId!.Value,
+                    PhotoUrl = request.PhotoUrl,
+                },
+                cancellationToken,
+                async (student, issuedEmail, token) =>
+                {
+                    request.Status = RegistrationRequestStatus.Approved;
+                    request.ReviewedAt = DateTime.UtcNow;
+                    request.ReviewedByUserId = reviewerUserId;
+                    request.ReviewNote = Trim(note);
+                    request.CreatedStudentId = student.Id;
+                    request.IssuedEmail = issuedEmail;
+                    await _db.SaveChangesAsync(token);
+                });
+        var teacherProvisioned = isTeacher
+            ? await _provisioning.CreateTeacherAsync(
+                new ProvisionTeacherRequest
+                {
+                    FullName = request.FullName,
+                    Email = request.ContactEmail,
+                    PhotoUrl = request.PhotoUrl,
+                },
+                cancellationToken)
+            : null;
 
-        if (!provisioned.Succeeded || provisioned.Entity is null)
+        if ((studentProvisioned is null || !studentProvisioned.Succeeded || studentProvisioned.Entity is null)
+            && (teacherProvisioned is null || !teacherProvisioned.Succeeded || teacherProvisioned.Entity is null))
         {
             return RegistrationResult<ApprovedRegistrationResponse>.Fail(
                 RegistrationFailure.Invalid,
                 "Could not create the account",
-                [.. provisioned.Errors]);
+                [.. (studentProvisioned?.Errors ?? teacherProvisioned?.Errors ?? [])]);
         }
 
-        var student = provisioned.Entity;
+        var student = studentProvisioned?.Entity;
+        var teacher = teacherProvisioned?.Entity;
+        var userId = student?.UserId ?? teacher?.UserId;
         var issuedEmail = await _db.Users
-            .Where(u => u.Id == student.UserId)
+            .Where(u => u.Id == userId)
             .Select(u => u.Email)
             .FirstOrDefaultAsync(cancellationToken) ?? string.Empty;
 
-        request.Status = RegistrationRequestStatus.Approved;
-        request.ReviewedAt = DateTime.UtcNow;
-        request.ReviewedByUserId = reviewerUserId;
-        request.ReviewNote = Trim(note);
-        request.CreatedStudentId = student.Id;
-        request.IssuedEmail = issuedEmail;
+        if (isTeacher)
+        {
+            request.Status = RegistrationRequestStatus.Approved;
+            request.ReviewedAt = DateTime.UtcNow;
+            request.ReviewedByUserId = reviewerUserId;
+            request.ReviewNote = Trim(note);
+            request.CreatedStudentId = null;
+            request.IssuedEmail = issuedEmail;
 
-        await _db.SaveChangesAsync(cancellationToken);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
 
         _logger.LogInformation(
-            "Registration request {RequestId} approved as student {StudentIdNumber} by {Reviewer}",
+            "Registration request {RequestId} approved as {RequestedRole} by {Reviewer}",
             request.Id,
-            student.StudentIdNumber,
+            request.RequestedRole,
             reviewerUserId);
 
-        return RegistrationResult<ApprovedRegistrationResponse>.Ok(new ApprovedRegistrationResponse
+        var approvedResponse = new ApprovedRegistrationResponse
         {
             RequestId = request.Id,
-            StudentId = student.Id,
+            RequestedRole = request.RequestedRole,
+            StudentId = student?.Id,
+            TeacherId = teacher?.Id,
             FullName = request.FullName,
-            StudentIdNumber = student.StudentIdNumber,
+            StudentIdNumber = student?.StudentIdNumber,
+            EmployeeId = teacher?.EmployeeId,
             IssuedEmail = issuedEmail,
             ContactEmail = request.ContactEmail,
             // Always set here: the provisioning call above never supplies a password of its own.
-            TemporaryPassword = provisioned.TemporaryPassword ?? string.Empty,
-            GradeLevelName = request.GradeLevel!.Name,
-            SectionName = request.Section!.Name,
+            TemporaryPassword = studentProvisioned?.TemporaryPassword ?? teacherProvisioned?.TemporaryPassword ?? string.Empty,
+            GradeLevelName = request.GradeLevel?.Name,
+            SectionName = request.Section?.Name,
             ApprovedAt = request.ReviewedAt!.Value,
             Message =
                 $"Send these to {request.ContactEmail}. The temporary password is shown once and "
-              + "cannot be retrieved again; the student should change it after signing in.",
-        });
+              + "cannot be retrieved again; the new account holder should change it after signing in.",
+        };
+
+        try
+        {
+            var recipient = !string.IsNullOrWhiteSpace(request.ContactEmail)
+                ? request.ContactEmail
+                : issuedEmail;
+
+            var roleLabel = request.RequestedRole == "Teacher" ? "teacher" : "student";
+            var bodyPlain =
+                $"Hello {request.FullName},\n\n" +
+                $"Your School Management System {roleLabel} account has been approved.\n\n" +
+                $"Sign-in email: {issuedEmail}\n" +
+                $"Temporary password: {approvedResponse.TemporaryPassword}\n\n" +
+                "Please sign in and change your password immediately.";
+
+            var bodyHtml =
+                $"<p>Hello {System.Net.WebUtility.HtmlEncode(request.FullName)},</p>" +
+                $"<p>Your School Management System {roleLabel} account has been approved.</p>" +
+                $"<p><strong>Sign-in email:</strong> {System.Net.WebUtility.HtmlEncode(issuedEmail)}</p>" +
+                $"<p><strong>Temporary password:</strong> {System.Net.WebUtility.HtmlEncode(approvedResponse.TemporaryPassword)}</p>" +
+                "<p>Please sign in and change your password immediately.</p>";
+
+            if (!string.IsNullOrWhiteSpace(recipient))
+            {
+                await _emailSender.SendEmailAsync(recipient, "Your School Management System account is ready", bodyHtml, bodyPlain, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Approval email failed for registration request {RequestId} ({Role})",
+                request.Id,
+                request.RequestedRole);
+        }
+
+        return RegistrationResult<ApprovedRegistrationResponse>.Ok(approvedResponse);
     }
 
     public async Task<RegistrationResult<RegistrationRequestResponse>> RejectAsync(
@@ -354,6 +509,18 @@ public class RegistrationRequestService : IRegistrationRequestService
         string? note,
         string reviewerUserId,
         CancellationToken cancellationToken = default)
+    {
+        return await WithRequestLockAsync(
+            requestId,
+            token => RejectUnderLockAsync(requestId, note, reviewerUserId, token),
+            cancellationToken);
+    }
+
+    private async Task<RegistrationResult<RegistrationRequestResponse>> RejectUnderLockAsync(
+        int requestId,
+        string? note,
+        string reviewerUserId,
+        CancellationToken cancellationToken)
     {
         var request = await _db.StudentRegistrationRequests
             .FirstOrDefaultAsync(r => r.Id == requestId, cancellationToken);
@@ -379,7 +546,10 @@ public class RegistrationRequestService : IRegistrationRequestService
         request.ReviewedByUserId = reviewerUserId;
         request.ReviewNote = Trim(note);
 
+        var rejectedPhotoUrl = request.PhotoUrl;
+        request.PhotoUrl = null;
         await _db.SaveChangesAsync(cancellationToken);
+        await _photoStorage.DeleteAsync(rejectedPhotoUrl);
 
         _logger.LogInformation(
             "Registration request {RequestId} rejected by {Reviewer}",
@@ -390,6 +560,71 @@ public class RegistrationRequestService : IRegistrationRequestService
 
         return RegistrationResult<RegistrationRequestResponse>.Ok(
             rejected.First(r => r.Id == request.Id));
+    }
+
+    private async Task<RegistrationResult<T>> WithRequestLockAsync<T>(
+        int requestId,
+        Func<CancellationToken, Task<RegistrationResult<T>>> action,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        // Session ownership lets the lock span the provisioning transaction on this connection.
+        await _db.Database.OpenConnectionAsync(cancellationToken);
+        var lockAcquired = false;
+
+        try
+        {
+            await using var command = _db.Database.GetDbConnection().CreateCommand();
+            command.CommandText =
+                "DECLARE @lockResult int; " +
+                "EXEC @lockResult = sys.sp_getapplock " +
+                "@Resource = @resource, @LockMode = N'Exclusive', " +
+                "@LockOwner = N'Session', @LockTimeout = 10000; " +
+                "SELECT @lockResult;";
+            var resource = command.CreateParameter();
+            resource.ParameterName = "@resource";
+            resource.DbType = DbType.String;
+            resource.Size = 255;
+            resource.Value = $"StudentRegistrationApproval:{requestId}";
+            command.Parameters.Add(resource);
+
+            var lockResult = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken));
+            if (lockResult < 0)
+            {
+                return RegistrationResult<T>.Fail(
+                    RegistrationFailure.Conflict,
+                    "Review is already in progress",
+                    "This application is currently being reviewed. Refresh the queue and try again.");
+            }
+
+            lockAcquired = true;
+            return await action(cancellationToken);
+        }
+        finally
+        {
+            if (lockAcquired)
+            {
+                try
+                {
+                    await using var release = _db.Database.GetDbConnection().CreateCommand();
+                    release.CommandText =
+                        "EXEC sys.sp_releaseapplock @Resource = @resource, @LockOwner = N'Session';";
+                    var resource = release.CreateParameter();
+                    resource.ParameterName = "@resource";
+                    resource.DbType = DbType.String;
+                    resource.Size = 255;
+                    resource.Value = $"StudentRegistrationApproval:{requestId}";
+                    release.Parameters.Add(resource);
+                    await release.ExecuteNonQueryAsync(CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Could not release registration review lock for request {RequestId}", requestId);
+                }
+            }
+
+            await _db.Database.CloseConnectionAsync();
+        }
     }
 
     private static string? Trim(string? note) =>

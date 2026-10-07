@@ -104,6 +104,12 @@ public record UpdateSubjectRequest
     [Required, MaxLength(150)]
     public string SubjectName { get; init; } = string.Empty;
 
+    [Required, MaxLength(20)]
+    public string Code { get; init; } = string.Empty;
+
+    [Range(1, int.MaxValue)]
+    public int GradeLevelId { get; init; }
+
     [MaxLength(500)]
     public string? Description { get; init; }
 

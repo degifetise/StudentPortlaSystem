@@ -6,34 +6,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace HaladeHighSchool.Api.Data;
 
-/*  ===========================================================================
-    DEVELOPMENT SEED CREDENTIALS
-    ===========================================================================
-    Every login this file creates is listed here. Nothing else in the codebase
-    creates an account on start-up, so this block is the complete picture.
-
-      Role      Email                              Password        Source
-      -------   --------------------------------   -------------   ----------------------
-      Admin     admin@haladehighschool.edu         Admin@12345     SeedAdmin, all envs
-      Teacher   k.abebe@haladehighschool.edu        Teacher@12345   SeedDemoAccounts, dev
-      Student   abel.t@haladehighschool.edu         Student@12345   SeedDemoAccounts, dev
-
-    The values come from configuration, never from constants in this file:
-      SeedAdmin        - appsettings.json,             created in every environment
-      SeedDemoAccounts - appsettings.Development.json, created in Development only
-
-    Two safeguards keep these out of a real deployment:
-      1. The demo cohort is skipped unless IHostEnvironment.IsDevelopment().
-      2. Its configuration section lives only in appsettings.Development.json, so
-         even a mis-set environment name finds nothing to create.
-
-    Change the administrator password before the first production start-up, and
-    prefer a user secret or environment variable over appsettings.json:
-      dotnet user-secrets set "SeedAdmin:Password" "<strong-password>"
-
-    See README_CREDENTIALS.md for the full reference, including the accounts that
-    database/seed-demo-data.ps1 adds on top of these.
-    =========================================================================== */
+/* Seed account values are read from configuration. Keep passwords and signing keys
+   in .NET user-secrets or environment variables, never in appsettings files.
+   See README_CREDENTIALS.md for local setup instructions. */
 
 /// <summary>
 /// Creates the artefacts the Phase 1 T-SQL script cannot: Identity password hashes must be
@@ -62,11 +37,17 @@ public static class DbSeeder
             accounts.Add(admin);
         }
 
+        await EnsureAllTeacherRolesAsync(
+            services.GetRequiredService<ApplicationDbContext>(),
+            userManager,
+            logger,
+            cancellationToken);
+
         // Demo teacher and student, so a fresh clone can sign in as all three roles.
         if (environment.IsDevelopment())
         {
             accounts.AddRange(await SeedDemoAccountsAsync(services, configuration, userManager, logger, cancellationToken));
-            LogCredentialSummary(accounts, environment, logger);
+            LogCredentialSummary(accounts, logger);
         }
     }
 
@@ -149,14 +130,11 @@ public static class DbSeeder
         }
 
         var teacherEmail = section["Teacher:Email"];
-        var studentEmail = section["Student:Email"];
-
         // Per-role passwords, falling back to a shared one so either style of config works.
         var teacherPassword = section["Teacher:Password"] ?? section["Password"];
         var studentPassword = section["Student:Password"] ?? section["Password"];
 
         if (string.IsNullOrWhiteSpace(teacherEmail) ||
-            string.IsNullOrWhiteSpace(studentEmail) ||
             string.IsNullOrWhiteSpace(teacherPassword) ||
             string.IsNullOrWhiteSpace(studentPassword))
         {
@@ -167,8 +145,10 @@ public static class DbSeeder
         var provisioning = services.GetRequiredService<IAccountProvisioningService>();
 
         // ---- Teacher -------------------------------------------------------
-        if (await userManager.FindByEmailAsync(teacherEmail) is not null)
+        var existingTeacher = await userManager.FindByEmailAsync(teacherEmail);
+        if (existingTeacher is not null)
         {
+            await EnsureRoleAsync(userManager, existingTeacher, Roles.Teacher, logger);
             seeded.Add(new SeededAccount(Roles.Teacher, teacherEmail, teacherPassword, WasCreated: false));
         }
         else
@@ -195,13 +175,23 @@ public static class DbSeeder
         }
 
         // ---- Student -------------------------------------------------------
-        if (await userManager.FindByEmailAsync(studentEmail) is not null)
+        var db = services.GetRequiredService<ApplicationDbContext>();
+        var studentFullName = section["Student:FullName"] ?? "Demo Student";
+        var existingStudentUser = await db.Students
+            .Where(student => student.User != null && student.User.FullName == studentFullName)
+            .Select(student => student.User)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (existingStudentUser is not null)
         {
-            seeded.Add(new SeededAccount(Roles.Student, studentEmail, studentPassword, WasCreated: false));
+            await EnsureRoleAsync(userManager, existingStudentUser, Roles.Student, logger);
+            seeded.Add(new SeededAccount(
+                Roles.Student,
+                existingStudentUser.Email ?? string.Empty,
+                studentPassword,
+                WasCreated: false));
             return seeded;
         }
-
-        var db = services.GetRequiredService<ApplicationDbContext>();
 
         /* A student needs a class. Both are matched on the values no API can change -
            the lowest grade Level and the alphabetically first section Code - because an
@@ -228,15 +218,22 @@ public static class DbSeeder
 
         var studentResult = await provisioning.CreateStudentAsync(new ProvisionStudentRequest
         {
-            Email = studentEmail,
             Password = studentPassword,
-            FullName = section["Student:FullName"] ?? "Demo Student",
+            FullName = studentFullName,
             GradeLevelId = gradeLevelId.Value,
             SectionId = sectionId.Value
         }, cancellationToken);
 
-        if (studentResult.Succeeded)
+        if (studentResult.Succeeded && studentResult.Entity is not null)
         {
+            var studentUser = await userManager.FindByIdAsync(studentResult.Entity.UserId!);
+            if (studentUser is null)
+            {
+                logger.LogError("The demo student was created without a matching login.");
+                return seeded;
+            }
+
+            var studentEmail = studentUser.Email ?? string.Empty;
             logger.LogInformation("Seeded demo student {Email}", studentEmail);
             seeded.Add(new SeededAccount(Roles.Student, studentEmail, studentPassword, WasCreated: true));
         }
@@ -250,45 +247,65 @@ public static class DbSeeder
         return seeded;
     }
 
-    /// <summary>
-    /// Prints the sign-in details to the console. Called only when the host environment is
-    /// Development, because it deliberately writes passwords in clear text.
-    /// </summary>
-    private static void LogCredentialSummary(
-        List<SeededAccount> accounts,
-        IHostEnvironment environment,
+    private static async Task EnsureRoleAsync(
+        UserManager<ApplicationUser> userManager,
+        ApplicationUser user,
+        string role,
         ILogger logger)
+    {
+        if (await userManager.IsInRoleAsync(user, role))
+        {
+            return;
+        }
+
+        var result = await userManager.AddToRoleAsync(user, role);
+        if (result.Succeeded)
+        {
+            logger.LogInformation("Repaired {Role} role membership for {Email}", role, user.Email);
+        }
+        else
+        {
+            logger.LogError(
+                "Failed to assign {Role} role to {Email}: {Errors}",
+                role,
+                user.Email,
+                string.Join("; ", result.Errors.Select(e => e.Description)));
+        }
+    }
+
+    private static async Task EnsureAllTeacherRolesAsync(
+        ApplicationDbContext db,
+        UserManager<ApplicationUser> userManager,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        var teacherUserIds = await db.Teachers
+            .AsNoTracking()
+            .Where(t => t.UserId != null)
+            .Select(t => t.UserId!)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        foreach (var userId in teacherUserIds)
+        {
+            var user = await userManager.FindByIdAsync(userId);
+            if (user is not null)
+            {
+                await EnsureRoleAsync(userManager, user, Roles.Teacher, logger);
+            }
+        }
+    }
+
+    /// <summary>Logs the number of processed demo accounts without disclosing credentials.</summary>
+    private static void LogCredentialSummary(List<SeededAccount> accounts, ILogger logger)
     {
         if (accounts.Count == 0)
         {
             return;
         }
 
-        var rows = accounts
-            .OrderBy(a => Array.IndexOf(Roles.All, a.Role))
-            .Select(a => string.Format(
-                "  {0,-8} {1,-34} {2,-15} {3}",
-                a.Role,
-                a.Email,
-                a.Password,
-                a.WasCreated ? "created now" : "already existed"));
-
-        logger.LogWarning(
-            """
-            ==========================================================================
-             DEVELOPMENT SEED CREDENTIALS - {Environment} environment
-             Passwords are printed in clear text and are never logged outside
-             Development. A password shown for an account that already existed is the
-             configured value, which is wrong if someone has since changed it.
-            --------------------------------------------------------------------------
-              ROLE     EMAIL                              PASSWORD        STATUS
-            {Rows}
-            --------------------------------------------------------------------------
-             Reference: README_CREDENTIALS.md
-             Classes, assessments and marks: database/seed-demo-data.ps1
-            ==========================================================================
-            """,
-            environment.EnvironmentName,
-            string.Join(Environment.NewLine, rows));
+        logger.LogInformation(
+            "Development seeding processed {AccountCount} demo accounts; credentials were not logged.",
+            accounts.Count);
     }
 }
